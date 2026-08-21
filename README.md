@@ -29,19 +29,24 @@ codes, safe filename and path handling, and behaviour that is identical on Linux
 
 ## Supported platforms
 
-| OS | Status |
-| --- | --- |
-| Linux | Supported |
-| macOS | Supported |
-| Windows | Supported |
+| OS | Automated tests (CI) | End-to-end download |
+| --- | --- | --- |
+| Linux | Python 3.10-3.13 | Manually verified |
+| macOS | Python 3.10-3.13 | Not yet exercised |
+| Windows | Python 3.10-3.13 | Not yet exercised |
 
 The application uses only Python APIs and `pathlib` for path handling. It never shells out, never
 assumes Bash or GNU utilities, and never hardcodes an OS-specific path.
 
-> **Note on testing.** Development and the end-to-end verification described below were carried out
-> on Linux (Python 3.12.3). The code contains no platform-specific branches and the test suite
-> covers Windows path and filename rules explicitly, but the project has not yet been run on
-> Windows or macOS hardware.
+> **Note on testing.** Two different things are verified, and they are not the same claim:
+>
+> - **Automated tests run on all three platforms.** The full suite, plus Ruff and strict mypy, runs
+>   on Ubuntu, Windows and macOS against Python 3.10-3.13 via GitHub Actions on every push and pull
+>   request. The code contains no platform-specific branches, and the suite covers Windows path and
+>   filename rules explicitly.
+> - **Real end-to-end downloads have only been performed on Linux** (Python 3.12.3). CI installs no
+>   FFmpeg and contacts no media service, so actual downloading, stream merging and audio conversion
+>   remain manually verified on Linux only.
 
 ## Supported media services
 
@@ -521,8 +526,9 @@ These are accurate as of this version. They are limitations, not planned feature
   within a run, but nothing is recorded between runs.
 - **Progress is per-stream.** When video and audio are downloaded separately, two progress phases
   are shown rather than a single combined total.
-- **Not yet exercised on Windows or macOS hardware.** See
-  [Supported platforms](#supported-platforms).
+- **Real downloads verified on Linux only.** The automated suite passes on Windows and macOS in CI,
+  but CI runs no FFmpeg and downloads no media, so end-to-end downloading has not been exercised on
+  Windows or macOS hardware. See [Supported platforms](#supported-platforms).
 
 ## Possible future improvements
 

@@ -40,8 +40,10 @@ jobs:
       # contacts YouTube, Instagram, TikTok, X or any other external service.
       # FFmpeg, Node and Deno are deliberately not installed -- they are not
       # needed for the unit suite.
+      # No -q here: pyproject.toml already sets addopts = "-q", and a second
+      # -q silences the "N passed" summary that makes CI logs worth reading.
       - name: Run tests
-        run: python -m pytest -q
+        run: python -m pytest
 
       - name: Lint (Ruff)
         run: python -m ruff check .
