@@ -1,0 +1,53 @@
+name: CI
+
+# The application claims identical behaviour on Linux, Windows and macOS.
+# This matrix is what verifies that claim on every change.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # A failure on one platform must not hide the results of the others.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # Every step below runs against the interpreter provided by setup-python.
+      # No virtual environment is created, so there are no POSIX-only
+      # .venv/bin/... paths and each command is identical on all three runners.
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install project with development dependencies
+        run: python -m pip install -e ".[dev]"
+
+      # The test suite is entirely offline: yt_dlp.YoutubeDL is replaced by a
+      # fake through the Downloader class's injectable factory, so no job ever
+      # contacts YouTube, Instagram, TikTok, X or any other external service.
+      # FFmpeg, Node and Deno are deliberately not installed -- they are not
+      # needed for the unit suite.
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Lint (Ruff)
+        run: python -m ruff check .
+
+      - name: Formatting (Ruff)
+        run: python -m ruff format --check .
+
+      - name: Type check (mypy)
+        run: python -m mypy src

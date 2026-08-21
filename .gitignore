@@ -1,0 +1,97 @@
+# --- Python virtual environment -------------------------------------------
+.venv/
+venv/
+env/
+
+# --- Python bytecode and caches -------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Test, type-checker and linter caches ---------------------------------
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+.ruff_cache/
+.tox/
+.nox/
+
+# --- Coverage output -------------------------------------------------------
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# --- Build and distribution artifacts --------------------------------------
+build/
+dist/
+*.egg-info/
+*.egg-info
+.eggs/
+*.egg
+
+# --- Local environment and configuration -----------------------------------
+.env
+.env.*
+!.env.example
+*.local
+
+# Credentials and browser state. Cookie support is NOT implemented, but these
+# patterns are in place first so such files can never be committed later.
+cookies.txt
+*.cookies
+*cookies*.txt
+secrets.*
+*.pem
+*.key
+!tests/**/*.key
+
+# --- Editors and IDEs ------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# --- OS-generated metadata -------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# --- Logs and temporary files ----------------------------------------------
+*.log
+*.tmp
+*.temp
+
+# --- Downloaded media ------------------------------------------------------
+# The default output directory, plus media extensions anywhere in the tree, so
+# large files can never be committed by accident.
+downloads/
+
+*.mp4
+*.mkv
+*.webm
+*.mov
+*.avi
+*.flv
+*.mp3
+*.m4a
+*.aac
+*.opus
+*.wav
+*.flac
+*.ogg
+
+# yt-dlp partial downloads and sidecar files
+*.part
+*.ytdl
+*.frag
+*.frag.urls
+
+# Test fixtures are source, not media: keep them tracked.
+!tests/fixtures/**

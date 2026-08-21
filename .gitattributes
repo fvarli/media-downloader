@@ -1,0 +1,10 @@
+# Normalise line endings in the repository so the same bytes are checked out on
+# Linux, macOS and Windows regardless of each contributor's core.autocrlf setting.
+# This keeps `ruff format --check` byte-identical across the CI matrix.
+* text=auto
+
+*.py   text eol=lf
+*.toml text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.md   text eol=lf
