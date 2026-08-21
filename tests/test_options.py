@@ -10,6 +10,7 @@ import pytest
 from media_downloader.errors import FFmpegRequiredError
 from media_downloader.ffmpeg import FFmpegStatus
 from media_downloader.jsruntime import JSRuntimeStatus
+from media_downloader.naming import AUTO_OUTPUT_TEMPLATE
 from media_downloader.options import (
     build_format_selector,
     build_info_opts,
@@ -52,7 +53,7 @@ def test_video_options_use_the_output_directory(
     assert opts["format"] == "bv*[height<=?1080]+ba/b[height<=?1080]/b"
     assert opts["paths"]["home"] == str(request.output_dir)
     # Relative template + paths.home, so yt-dlp does not ignore "paths".
-    assert opts["outtmpl"]["default"] == request.filename_template
+    assert opts["outtmpl"]["default"] == AUTO_OUTPUT_TEMPLATE
     assert opts["ffmpeg_location"] == str(ffmpeg_present.location)
 
 
@@ -183,7 +184,33 @@ def test_output_template_stays_relative_so_paths_is_honoured(
     request_factory: Any, ffmpeg_present: FFmpegStatus
 ) -> None:
     """An absolute outtmpl makes yt-dlp ignore "paths" and misplace .part files."""
-    opts = build_ydl_opts(request_factory(), ffmpeg_present)
+    opts = build_ydl_opts(request_factory(filename_template="x.%(ext)s"), ffmpeg_present)
     template = opts["outtmpl"]["default"]
     assert not Path(template).is_absolute()
     assert "/" not in template and "\\" not in template
+
+
+def test_automatic_template_is_used_when_no_filename_was_given(
+    request_factory: Any, ffmpeg_present: FFmpegStatus
+) -> None:
+    opts = build_ydl_opts(request_factory(filename_template=None), ffmpeg_present)
+    assert opts["outtmpl"]["default"] == AUTO_OUTPUT_TEMPLATE
+
+
+def test_a_custom_template_is_passed_through_untouched(
+    request_factory: Any, ffmpeg_present: FFmpegStatus
+) -> None:
+    """The user owns their --filename; the cleaner must not rewrite it."""
+    custom = "%(title)s.%(ext)s"
+    opts = build_ydl_opts(request_factory(filename_template=custom), ffmpeg_present)
+    assert opts["outtmpl"]["default"] == custom
+    assert AUTO_OUTPUT_TEMPLATE not in opts["outtmpl"]["default"]
+
+
+def test_windows_sanitisation_still_applies_under_automatic_naming(
+    request_factory: Any, ffmpeg_present: FFmpegStatus
+) -> None:
+    """Cleaning is additive: yt-dlp's own safety net stays on."""
+    opts = build_ydl_opts(request_factory(filename_template=None), ffmpeg_present)
+    assert opts["windowsfilenames"] is True
+    assert opts["trim_file_name"] == 200

@@ -13,6 +13,7 @@ from media_downloader.config import DownloadRequest
 from media_downloader.errors import FFmpegRequiredError
 from media_downloader.ffmpeg import FFMPEG_GUIDANCE, FFmpegStatus
 from media_downloader.jsruntime import JSRuntimeStatus, js_runtimes_option
+from media_downloader.naming import AUTO_OUTPUT_TEMPLATE
 
 # Best video plus best audio, falling back to the best single stream.
 FORMAT_BEST = "bv*+ba/b"
@@ -78,12 +79,14 @@ def build_ydl_opts(
             ),
         )
 
+    # With no --filename, the automatic template pulls in the cleaned name that
+    # downloader._register_auto_naming injects before yt-dlp builds the name.
     # The template stays relative and the directory is supplied via "paths":
     # an absolute outtmpl would make yt-dlp ignore "paths" and scatter the
     # intermediate .part files. naming.validate_filename_template has already
     # guaranteed the template cannot contain a path separator.
     opts: dict[str, Any] = {
-        "outtmpl": {"default": request.filename_template},
+        "outtmpl": {"default": request.filename_template or AUTO_OUTPUT_TEMPLATE},
         "paths": {"home": str(request.output_dir)},
         # Applied on every OS so filenames are identical across platforms and
         # safe on FAT/exFAT/NTFS volumes. yt-dlp owns all sanitisation.

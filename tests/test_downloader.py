@@ -15,6 +15,7 @@ from media_downloader.errors import (
     OutputError,
 )
 from media_downloader.ffmpeg import FFmpegStatus
+from media_downloader.naming import AUTO_NAME_FIELD
 
 from .conftest import FakeYoutubeDL
 
@@ -206,3 +207,95 @@ def test_progress_hook_is_registered_when_supplied(
     downloader = Downloader(ffmpeg_present, ydl_factory=factory, progress_hook=seen.append)
     downloader.download(request_factory())
     assert created[0].opts["progress_hooks"] == [seen.append]
+
+
+class RecordingYoutubeDL(FakeYoutubeDL):
+    """Fake that records postprocessors registered against it."""
+
+    def __init__(self, opts: dict[str, Any], **kwargs: Any) -> None:
+        super().__init__(opts, **kwargs)
+        self.postprocessors: list[tuple[Any, str]] = []
+
+    def add_post_processor(self, pp: Any, when: str = "post_process") -> None:
+        self.postprocessors.append((pp, when))
+
+
+def make_recording_downloader(
+    ffmpeg: FFmpegStatus, **fake_kwargs: Any
+) -> tuple[Downloader, list[RecordingYoutubeDL]]:
+    created: list[RecordingYoutubeDL] = []
+
+    def factory(opts: dict[str, Any]) -> RecordingYoutubeDL:
+        fake = RecordingYoutubeDL(opts, **fake_kwargs)
+        created.append(fake)
+        return fake
+
+    return Downloader(ffmpeg, ydl_factory=factory), created
+
+
+def test_automatic_naming_is_registered_before_the_filename_is_built(
+    ffmpeg_present: FFmpegStatus, request_factory: Any, tmp_path: Path
+) -> None:
+    """yt-dlp runs pre_process hooks immediately before prepare_filename."""
+    downloader, created = make_recording_downloader(
+        ffmpeg_present, info=SAMPLE_INFO, post_hook_path=str(tmp_path / "v.mp4")
+    )
+    downloader.download(request_factory(filename_template=None))
+
+    assert len(created[0].postprocessors) == 1
+    _, when = created[0].postprocessors[0]
+    assert when == "pre_process"
+
+
+def test_the_registered_postprocessor_injects_the_clean_stem(
+    ffmpeg_present: FFmpegStatus, request_factory: Any, tmp_path: Path
+) -> None:
+    downloader, created = make_recording_downloader(
+        ffmpeg_present, info=SAMPLE_INFO, post_hook_path=str(tmp_path / "v.mp4")
+    )
+    downloader.download(request_factory(filename_template=None))
+
+    pp, _ = created[0].postprocessors[0]
+    info = {"title": "Trend - https://t.co/YF86pOpbhn", "id": "2090546322570924033"}
+    _, result = pp.run(info)
+    assert result[AUTO_NAME_FIELD] == "Trend - 2090546322570924033"
+
+
+def test_a_custom_filename_skips_automatic_naming_entirely(
+    ffmpeg_present: FFmpegStatus, request_factory: Any, tmp_path: Path
+) -> None:
+    """The user's template must reach yt-dlp without the cleaner attached."""
+    downloader, created = make_recording_downloader(
+        ffmpeg_present, info=SAMPLE_INFO, post_hook_path=str(tmp_path / "v.mp4")
+    )
+    downloader.download(request_factory(filename_template="%(title)s.%(ext)s"))
+
+    assert created[0].postprocessors == []
+    assert created[0].opts["outtmpl"]["default"] == "%(title)s.%(ext)s"
+
+
+def test_naming_failure_never_aborts_a_download(
+    ffmpeg_present: FFmpegStatus, request_factory: Any, tmp_path: Path
+) -> None:
+    """A broken info dict must degrade to yt-dlp's naming, not raise."""
+    downloader, created = make_recording_downloader(
+        ffmpeg_present, info=SAMPLE_INFO, post_hook_path=str(tmp_path / "v.mp4")
+    )
+    downloader.download(request_factory(filename_template=None))
+    pp, _ = created[0].postprocessors[0]
+
+    class Hostile(dict[str, Any]):
+        def get(self, *args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("metadata exploded")
+
+    _, result = pp.run(Hostile())
+    assert AUTO_NAME_FIELD not in result
+
+
+def test_a_ydl_without_postprocessor_support_still_downloads(
+    ffmpeg_present: FFmpegStatus, request_factory: Any, tmp_path: Path
+) -> None:
+    """The plain fake has no add_post_processor; that must not be fatal."""
+    final = tmp_path / "v.mp4"
+    downloader, _ = make_downloader(ffmpeg_present, info=SAMPLE_INFO, post_hook_path=str(final))
+    assert downloader.download(request_factory(filename_template=None)).path == final.resolve()

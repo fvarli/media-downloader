@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from media_downloader.naming import (
-    DEFAULT_OUTPUT_TEMPLATE,
     resolve_output_dir,
     validate_filename_template,
 )
@@ -49,7 +48,10 @@ class DownloadRequest:
     quality: str = "best"
     audio_only: bool = False
     audio_format: str = LOSSLESS_AUDIO_FORMAT
-    filename_template: str = DEFAULT_OUTPUT_TEMPLATE
+    # None means the user gave no --filename, so the automatic naming policy
+    # in media_downloader.naming applies. A string is the user's own template
+    # and is never rewritten beyond the existing safety validation.
+    filename_template: str | None = None
     ffmpeg_location: str | None = None
     info_only: bool = False
     overwrite: bool = False
@@ -109,9 +111,7 @@ def build_request(
     env: Mapping[str, str] | None = None,
 ) -> DownloadRequest:
     """Assemble a validated :class:`DownloadRequest` from raw CLI values."""
-    template = (
-        validate_filename_template(filename) if filename is not None else DEFAULT_OUTPUT_TEMPLATE
-    )
+    template = validate_filename_template(filename) if filename is not None else None
 
     return DownloadRequest(
         url=url,

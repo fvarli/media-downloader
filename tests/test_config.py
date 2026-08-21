@@ -15,7 +15,6 @@ from media_downloader.config import (
     resolve_setting,
 )
 from media_downloader.errors import OutputError
-from media_downloader.naming import DEFAULT_OUTPUT_TEMPLATE
 
 
 def test_cli_value_beats_environment() -> None:
@@ -60,7 +59,8 @@ def test_build_request_applies_defaults(tmp_path: Path, monkeypatch: pytest.Monk
     assert request.quality == "best"
     assert request.audio_only is False
     assert request.audio_format == "best"
-    assert request.filename_template == DEFAULT_OUTPUT_TEMPLATE
+    # None means no --filename was given, so automatic naming applies.
+    assert request.filename_template is None
     assert request.ffmpeg_location is None
     assert request.output_dir == (tmp_path / "downloads").resolve()
 

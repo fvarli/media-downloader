@@ -28,7 +28,6 @@ from media_downloader.jsruntime import (
     detect_js_runtime,
 )
 from media_downloader.logging_setup import configure_logging
-from media_downloader.naming import DEFAULT_OUTPUT_TEMPLATE
 from media_downloader.progress import ProgressReporter
 from media_downloader.urls import SUPPORTED_SERVICE_NAMES, detect_service, validate_url
 
@@ -92,10 +91,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--filename",
         metavar="TEMPLATE",
         default=None,
-        # argparse applies %-formatting to help strings, so % must be doubled.
         help=(
-            "yt-dlp output template for the file name "
-            f"(default: {DEFAULT_OUTPUT_TEMPLATE.replace('%', '%%')})."
+            "yt-dlp output template for the file name. By default the name is "
+            "generated automatically as '<title> - <id>', with URLs and emoji "
+            "removed from the title."
         ),
     )
     parser.add_argument(

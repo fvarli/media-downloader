@@ -26,7 +26,7 @@ from media_downloader.errors import (
 from media_downloader.ffmpeg import FFmpegStatus
 from media_downloader.jsruntime import JSRuntimeStatus
 from media_downloader.logging_setup import get_logger
-from media_downloader.naming import ensure_output_dir
+from media_downloader.naming import AUTO_NAME_FIELD, build_auto_filename_stem, ensure_output_dir
 from media_downloader.options import build_info_opts, build_ydl_opts
 
 logger = get_logger("downloader")
@@ -105,6 +105,55 @@ class DownloadResult:
     info: MediaInfo
 
 
+def _make_auto_name_postprocessor() -> Any:
+    """Build the postprocessor that injects the automatic filename stem.
+
+    yt-dlp runs ``pre_process`` hooks immediately before it builds the output
+    filename, so writing the cleaned name into the info dict there is enough --
+    nothing is renamed afterwards, and the merge, audio-conversion and
+    final-path steps all see the same name.
+
+    Passing the name as a *field value* rather than splicing it into the
+    template also means a title containing ``%`` or something that looks like
+    ``%(id)s`` is never re-interpreted as a template.
+
+    Imported lazily so ``--help`` does not pay for yt-dlp's import.
+    """
+    from yt_dlp.postprocessor import PostProcessor
+
+    class AutoNamePP(PostProcessor):  # type: ignore[misc]
+        """Writes the cleaned filename stem into the info dict."""
+
+        def run(self, info: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+            try:
+                stem = build_auto_filename_stem(info)
+            except Exception:  # pragma: no cover - naming must never abort a download
+                logger.debug("Automatic naming failed; falling back to the raw title.")
+                return [], info
+            if stem:
+                info[AUTO_NAME_FIELD] = stem
+            return [], info
+
+    return AutoNamePP()
+
+
+def _register_auto_naming(ydl: YoutubeDLLike) -> None:
+    """Attach the automatic-naming postprocessor if the object supports it.
+
+    Guarded so an injected test double without ``add_post_processor`` -- or a
+    future yt-dlp that drops it -- degrades to yt-dlp's own naming instead of
+    raising. The output template falls back to the raw title in that case.
+    """
+    add = getattr(ydl, "add_post_processor", None)
+    if not callable(add):
+        logger.debug("This yt-dlp object cannot take postprocessors; using default naming.")
+        return
+    try:
+        add(_make_auto_name_postprocessor(), when="pre_process")
+    except Exception:  # pragma: no cover - never let naming break a download
+        logger.debug("Could not register automatic naming; using default naming.")
+
+
 def _default_factory(opts: dict[str, Any]) -> YoutubeDLLike:
     """Construct a real ``yt_dlp.YoutubeDL``.
 
@@ -168,12 +217,25 @@ class Downloader:
             if callable(close):
                 close()
 
-    def _extract(self, opts: dict[str, Any], url: str, *, download: bool) -> dict[str, Any]:
-        """Run yt-dlp and normalise both its errors and its return value."""
+    def _extract(
+        self,
+        opts: dict[str, Any],
+        url: str,
+        *,
+        download: bool,
+        setup: Callable[[YoutubeDLLike], None] | None = None,
+    ) -> dict[str, Any]:
+        """Run yt-dlp and normalise both its errors and its return value.
+
+        ``setup`` runs against the live session before extraction, which is
+        where postprocessors have to be attached.
+        """
         from yt_dlp.utils import DownloadError, ExtractorError, UnsupportedError
 
         try:
             with self._session(opts) as ydl:
+                if setup is not None:
+                    setup(ydl)
                 info = ydl.extract_info(url, download=download)
         except UnsupportedError as exc:
             raise DownloadFailedError(
@@ -221,7 +283,10 @@ class Downloader:
             quiet=not self._verbose,
         )
 
-        info = self._extract(opts, request.url, download=True)
+        # Only automatic names are cleaned: a user-supplied --filename template
+        # is theirs, and is never rewritten beyond the safety validation.
+        setup = None if request.filename_template else _register_auto_naming
+        info = self._extract(opts, request.url, download=True, setup=setup)
         path = self._resolve_final_path(info, final_paths, request)
         return DownloadResult(path=path, info=MediaInfo.from_info_dict(info))
 

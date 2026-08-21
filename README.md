@@ -325,7 +325,7 @@ operating systems.
 | `-q`, `--quality` | `best`, `2160`, `1440`, `1080`, `720`, `480`, `360`, or `worst`. Default: `best`. Numeric values are an upper bound on height. |
 | `--audio` | Download audio only. |
 | `--audio-format` | `best`, `mp3`, `m4a`, `opus`, `flac`, `wav`. Default: `best`, which keeps the original stream without re-encoding. Any other value requires FFmpeg. |
-| `--filename TEMPLATE` | yt-dlp output template for the file name. Default: `%(title)s [%(id)s].%(ext)s`. Must be a bare file name — no directories. |
+| `--filename TEMPLATE` | yt-dlp output template for the file name, overriding the automatic naming below. Must be a bare file name — no directories. |
 | `--info` | Print metadata and exit without downloading. |
 | `--ffmpeg-location PATH` | Directory containing `ffmpeg` and `ffprobe`, if they are not on your PATH. |
 | `--overwrite` | Overwrite an existing file instead of keeping it. |
@@ -338,6 +338,24 @@ operating systems.
 
 Filename templates use [yt-dlp's output template syntax](https://github.com/yt-dlp/yt-dlp#output-template);
 useful fields include `%(title)s`, `%(id)s`, `%(ext)s`, `%(uploader)s` and `%(upload_date)s`.
+
+### Automatic file names
+
+Without `--filename`, names are generated as `<title> - <id>.<ext>`:
+
+```text
+Big Buck Bunny - aqz-KE-bpKQ.mp4
+Trend - 2090546322570924033.mp4
+```
+
+Social platforms often put links and emoji in the title, so the title is cleaned first: URLs, emoji
+and characters that no filesystem should carry are removed, and the leftover separator and
+whitespace debris is tidied up. Text is never transliterated, so Turkish and other non-Latin scripts
+stay readable. The media ID is always appended, which keeps names unique and traceable back to their
+source; if cleaning leaves no usable title, the uploader or service name is used instead.
+
+Passing `--filename` turns this off completely — your template is used exactly as written, subject
+only to the safety checks that keep output inside `--output`.
 
 ### Environment variables
 
