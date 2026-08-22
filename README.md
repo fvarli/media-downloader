@@ -47,7 +47,8 @@ assumes Bash or GNU utilities, and never hardcodes an OS-specific path.
 >   filename rules explicitly.
 > - **Real end-to-end downloads have only been performed on Linux** (Python 3.12.3). CI installs no
 >   FFmpeg and contacts no media service, so actual downloading, stream merging and audio conversion
->   remain manually verified on Linux only.
+>   remain manually verified on Linux only. The local web interface has additionally been verified by
+>   the project owner in a real browser, including an Instagram download.
 
 ## Supported media services
 
@@ -295,6 +296,9 @@ A few things worth knowing:
 - **One download at a time.** Starting a second while one is running is refused with a clear message.
 - If no browser can be opened -- over SSH, in WSL, on a headless machine -- open the printed URL
   yourself.
+- **There is no Docker and no container.** The page is served by the same Python installation that
+  runs the CLI, so if you can run `media-downloader`, you can run this -- there is nothing else to
+  install or configure.
 - It is built on Python's standard-library HTTP server, which adds no dependencies and starts
   instantly. The standard library notes that this server is not intended for internet-facing
   production use; that is why it is bound to loopback and cannot be configured to listen elsewhere.
