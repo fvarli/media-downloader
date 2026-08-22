@@ -52,6 +52,18 @@ def default_download_dir() -> Path:
     return Path.cwd() / "downloads"  # pragma: no cover - home exists in practice
 
 
+def current_platform() -> str:
+    """Return the platform name.
+
+    Indirection on purpose. It gives the tests a clean seam to exercise every
+    platform's branch instead of patching a stdlib module attribute, and it
+    stops type checking from being platform-dependent: comparing ``sys.platform``
+    directly makes a type checker treat the other branches as unreachable on
+    whichever OS it happens to be running on.
+    """
+    return sys.platform
+
+
 def open_folder(directory: Path) -> None:
     """Open ``directory`` in the desktop file manager.
 
@@ -67,12 +79,17 @@ def open_folder(directory: Path) -> None:
     if not target.is_dir():
         raise OutputError(f"The download folder does not exist yet: {target}")
 
+    platform = current_platform()
     try:
-        if sys.platform == "win32":
-            # startfile takes a path, not a command line; nothing is parsed.
-            os.startfile(target)  # type: ignore[attr-defined]
+        if platform == "win32":
+            # os.startfile exists only on Windows, so it is fetched dynamically.
+            # It takes a path, not a command line: nothing is parsed as syntax.
+            # getattr, not os.startfile: the attribute does not exist off
+            # Windows, so direct access fails type checking on Linux and macOS.
+            startfile = getattr(os, "startfile")  # noqa: B009
+            startfile(target)
             return
-        command = ["open" if sys.platform == "darwin" else "xdg-open", str(target)]
+        command = ["open" if platform == "darwin" else "xdg-open", str(target)]
         # No shell=True: the path is passed as a single argv entry.
         subprocess.run(command, check=True)
     except FileNotFoundError as exc:

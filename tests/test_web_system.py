@@ -59,7 +59,7 @@ def test_open_folder_uses_the_right_command_per_platform(
         assert "shell" not in kwargs, "a shell must never be involved"
         return subprocess.CompletedProcess(command, 0)
 
-    monkeypatch.setattr(system.sys, "platform", platform)
+    monkeypatch.setattr(system, "current_platform", lambda: platform)
     monkeypatch.setattr(system.subprocess, "run", fake_run)
     system.open_folder(tmp_path)
 
@@ -74,7 +74,7 @@ def test_open_folder_passes_an_argument_list_not_a_shell_string(
     awkward.mkdir()
     captured: list[Any] = []
 
-    monkeypatch.setattr(system.sys, "platform", "linux")
+    monkeypatch.setattr(system, "current_platform", lambda: "linux")
     monkeypatch.setattr(
         system.subprocess,
         "run",
@@ -94,7 +94,7 @@ def test_open_folder_uses_startfile_on_windows(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     seen: list[Path] = []
-    monkeypatch.setattr(system.sys, "platform", "win32")
+    monkeypatch.setattr(system, "current_platform", lambda: "win32")
     monkeypatch.setattr(system.os, "startfile", seen.append, raising=False)
     monkeypatch.setattr(
         system.subprocess,
@@ -117,7 +117,7 @@ def test_open_folder_refuses_a_path_that_is_not_a_directory(tmp_path: Path) -> N
 def test_a_missing_file_manager_is_a_clear_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(system.sys, "platform", "linux")
+    monkeypatch.setattr(system, "current_platform", lambda: "linux")
     monkeypatch.setattr(
         system.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError())
     )
@@ -140,3 +140,10 @@ def test_a_machine_with_no_browser_is_not_an_error(monkeypatch: pytest.MonkeyPat
         system.webbrowser, "open", lambda url: (_ for _ in ()).throw(RuntimeError("no display"))
     )
     assert system.open_browser("http://127.0.0.1:8765") is False
+
+
+def test_current_platform_reports_the_real_platform() -> None:
+    """The seam must default to the truth, not to a fixed value."""
+    import sys
+
+    assert system.current_platform() == sys.platform
