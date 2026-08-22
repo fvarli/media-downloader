@@ -24,10 +24,26 @@ def _no_real_os_interaction(monkeypatch: pytest.MonkeyPatch) -> None:
     Tests that exercise those paths patch subprocess.run themselves; monkeypatch
     applies their patch after this one, so theirs wins.
     """
-    monkeypatch.setattr(
-        "media_downloader.web.system.subprocess.run",
-        lambda *args, **kwargs: pytest.fail(f"a test tried to launch a real process: {args!r}"),
-    )
+    from media_downloader.web import system
+
+    class _RefusingSubprocess:
+        """Stands in for the subprocess module inside web.system only.
+
+        Replacing the name in that module's namespace, rather than setting an
+        attribute on the shared subprocess module, matters: ``import
+        subprocess`` binds one module object process-wide, so patching its
+        ``run`` also breaks unrelated stdlib code -- on some Windows and Python
+        combinations ``platform.machine()`` shells out to ``ver``.
+        """
+
+        SubprocessError = system.subprocess.SubprocessError
+        CalledProcessError = system.subprocess.CalledProcessError
+
+        @staticmethod
+        def run(*args: object, **kwargs: object) -> None:
+            pytest.fail(f"a test tried to launch a real process: {args!r}")
+
+    monkeypatch.setattr(system, "subprocess", _RefusingSubprocess)
 
 
 @pytest.fixture

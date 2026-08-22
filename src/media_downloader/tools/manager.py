@@ -23,6 +23,7 @@ import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
+from functools import lru_cache
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlsplit
@@ -131,7 +132,7 @@ class ToolManager:
         self._env = env
         self._fetch: Fetcher = fetcher or https_fetch
         self._platform = platform_name or current_platform
-        self._machine = machine or platform_module.machine
+        self._machine = machine or _host_machine
 
     # -- manifest --------------------------------------------------------
 
@@ -270,6 +271,17 @@ class ToolManager:
 
         logger.info("Installed %s %s into %s", tool, spec.version, final)
         return final
+
+
+@lru_cache(maxsize=1)
+def _host_machine() -> str:
+    """The machine architecture, worked out once.
+
+    ``platform.machine()`` shells out to ``ver`` on some Windows and Python
+    combinations, and discovery constructs a manager on every lookup, so this
+    is cached rather than re-derived on each call.
+    """
+    return platform_module.machine()
 
 
 def _make_executable(path: Path) -> None:
