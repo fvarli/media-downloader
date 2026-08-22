@@ -199,12 +199,14 @@ class Downloader:
         js_runtime: JSRuntimeStatus | None = None,
         ydl_factory: YDLFactory | None = None,
         progress_hook: Callable[[dict[str, Any]], None] | None = None,
+        postprocessor_hook: Callable[[dict[str, Any]], None] | None = None,
         verbose: bool = False,
     ) -> None:
         self._ffmpeg = ffmpeg
         self._js_runtime = js_runtime
         self._factory: YDLFactory = ydl_factory or _default_factory
         self._progress_hook = progress_hook
+        self._postprocessor_hook = postprocessor_hook
         self._verbose = verbose
 
     @contextmanager
@@ -277,6 +279,7 @@ class Downloader:
             self._ffmpeg,
             js_runtime=self._js_runtime,
             progress_hooks=[self._progress_hook] if self._progress_hook else None,
+            postprocessor_hooks=([self._postprocessor_hook] if self._postprocessor_hook else None),
             # post_hooks fire with the final path after every postprocessor and
             # file move, so this is the only reliable source for the result.
             post_hooks=[final_paths.append],

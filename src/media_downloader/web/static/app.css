@@ -1,0 +1,178 @@
+/* Media Downloader -- local web UI.
+   Deliberately small: one card, one action, no framework. */
+
+:root {
+  color-scheme: light dark;
+
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --border: #e2e5ea;
+  --text: #14181f;
+  --muted: #67707e;
+  --accent: #2f6df6;
+  --accent-text: #ffffff;
+  --accent-soft: #eaf0ff;
+  --ok: #12855a;
+  --error: #c8331f;
+  --error-soft: #fdecea;
+  --track: #e7eaef;
+  --radius: 12px;
+  --shadow: 0 1px 2px rgb(16 24 40 / 6%), 0 8px 24px rgb(16 24 40 / 6%);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1115;
+    --surface: #171a21;
+    --border: #262b35;
+    --text: #e8eaee;
+    --muted: #98a1b0;
+    --accent: #5b8cff;
+    --accent-text: #0b1020;
+    --accent-soft: #1b2437;
+    --ok: #3ecf8e;
+    --error: #ff7b6b;
+    --error-soft: #2a1b19;
+    --track: #232833;
+    --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 8px 24px rgb(0 0 0 / 30%);
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  padding: 40px 20px 56px;
+  display: flex;
+  justify-content: center;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Ubuntu,
+        "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.app { width: 100%; max-width: 540px; }
+
+.app__header { text-align: center; margin-bottom: 24px; }
+.app__header h1 { margin: 0; font-size: 26px; font-weight: 650; letter-spacing: -0.02em; }
+.app__subtitle { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px;
+}
+
+.form { display: grid; gap: 16px; }
+
+.field { display: grid; gap: 7px; }
+.field__label { font-size: 13px; font-weight: 550; color: var(--muted); }
+.field__row { display: flex; gap: 8px; }
+
+.input {
+  width: 100%;
+  padding: 10px 12px;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  transition: border-color .15s, box-shadow .15s;
+}
+.input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+select.input { appearance: none; cursor: pointer; padding-right: 34px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+                    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 17px) 19px, calc(100% - 12px) 19px;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.button {
+  font: inherit;
+  font-weight: 550;
+  padding: 10px 16px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background .15s, opacity .15s, border-color .15s;
+}
+.button:disabled { cursor: not-allowed; opacity: .55; }
+.button--primary { background: var(--accent); color: var(--accent-text); padding: 12px 16px; font-size: 15px; }
+.button--primary:not(:disabled):hover { filter: brightness(1.07); }
+.button--ghost { background: var(--bg); border-color: var(--border); color: var(--text); white-space: nowrap; }
+.button--ghost:not(:disabled):hover { border-color: var(--accent); color: var(--accent); }
+
+.segmented {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.segmented__option {
+  font: inherit; font-weight: 550;
+  padding: 8px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--muted); cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.segmented__option.is-active { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+
+/* --- status ------------------------------------------------------- */
+
+.status { margin-top: 16px; display: grid; gap: 12px; }
+.status__row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.status__phase { font-weight: 600; font-size: 14px; }
+.status__meta { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.status__name {
+  font-size: 14px; color: var(--text); word-break: break-word;
+}
+.status__hint { font-size: 13px; color: var(--muted); }
+.status--error .status__phase { color: var(--error); }
+.status--error { background: var(--error-soft); border-color: color-mix(in srgb, var(--error) 30%, transparent); }
+.status--done .status__phase { color: var(--ok); }
+
+.bar { height: 8px; border-radius: 999px; background: var(--track); overflow: hidden; }
+.bar__fill { height: 100%; background: var(--accent); border-radius: inherit; transition: width .25s ease; }
+.bar--indeterminate .bar__fill { width: 35%; animation: slide 1.1s ease-in-out infinite; }
+@keyframes slide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .bar__fill { transition: none; }
+  .bar--indeterminate .bar__fill { animation: none; width: 100%; opacity: .5; }
+}
+
+/* --- recent ------------------------------------------------------- */
+
+.recent { margin-top: 24px; }
+.recent__title { font-size: 13px; font-weight: 550; color: var(--muted); margin: 0 0 8px; }
+.recent__list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.recent__item {
+  display: flex; align-items: center; gap: 9px;
+  padding: 9px 12px; font-size: 13px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 9px;
+}
+.recent__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent__dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.recent__dot--completed { background: var(--ok); }
+.recent__dot--failed { background: var(--error); }
+
+/* --- footer ------------------------------------------------------- */
+
+.app__footer { margin-top: 28px; text-align: center; font-size: 12.5px; color: var(--muted); }
+.app__footer p { margin: 4px 0; }
+.app__path { word-break: break-all; }
+.linklike {
+  font: inherit; color: var(--accent); background: none; border: 0; padding: 0;
+  cursor: pointer; text-decoration: underline; text-underline-offset: 2px;
+}

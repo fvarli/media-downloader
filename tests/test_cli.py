@@ -12,6 +12,9 @@ from media_downloader.cli import build_parser, run
 from media_downloader.config import ENV_OUTPUT_DIR
 from media_downloader.downloader import DownloadResult, MediaInfo
 from media_downloader.errors import DownloadFailedError, ExitCode, MediaUnavailableError
+from media_downloader.ffmpeg import FFmpegStatus
+from media_downloader.jsruntime import JSRuntimeStatus
+from media_downloader.service import Environment
 
 SAMPLE_MEDIA_INFO = MediaInfo(
     title="Example Video",
@@ -28,6 +31,14 @@ SAMPLE_MEDIA_INFO = MediaInfo(
 VALID_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
 
+def _environment_without_ffmpeg(_ffmpeg_location: str | None = None) -> Environment:
+    """An environment with no FFmpeg, as the service layer would report it."""
+    return Environment(
+        ffmpeg=FFmpegStatus(ffmpeg=None, ffprobe=None),
+        js_runtime=JSRuntimeStatus(name="deno", path="/usr/bin/deno"),
+    )
+
+
 def flat(text: str) -> str:
     """Collapse all whitespace so assertions survive console re-wrapping.
 
@@ -39,7 +50,11 @@ def flat(text: str) -> str:
 
 
 class StubDownloader:
-    """Replaces the real Downloader so no network call is ever made."""
+    """Replaces the real Downloader so no network call is ever made.
+
+    Installed in place of service.create_downloader, which is the seam the CLI
+    uses to obtain a downloader.
+    """
 
     def __init__(self, result_path: Path | None = None, error: Exception | None = None) -> None:
         self.result_path = result_path
@@ -67,7 +82,7 @@ class StubDownloader:
 def stub_downloader(monkeypatch: pytest.MonkeyPatch):
     def install(result_path: Path | None = None, error: Exception | None = None) -> StubDownloader:
         stub = StubDownloader(result_path=result_path, error=error)
-        monkeypatch.setattr(cli_module, "Downloader", stub)
+        monkeypatch.setattr(cli_module, "create_downloader", stub)
         return stub
 
     return install
@@ -77,8 +92,14 @@ def stub_downloader(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_url_is_required() -> None:
+    """A bare invocation is still a usage error.
+
+    The positional is nargs="?" so that --web can stand alone, so this is now
+    enforced in run() rather than by argparse. Asserting it end-to-end is the
+    stronger guarantee anyway: what matters is the exit code the user sees.
+    """
     with pytest.raises(SystemExit) as excinfo:
-        build_parser().parse_args([])
+        run([])
     assert excinfo.value.code == int(ExitCode.USAGE_ERROR)
 
 
@@ -239,9 +260,7 @@ def test_audio_conversion_without_ffmpeg_exits_with_the_ffmpeg_code(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The real Downloader is used here: build_ydl_opts must refuse the request."""
-    monkeypatch.setattr(
-        cli_module, "detect_ffmpeg", lambda _=None: cli_module.FFmpegStatus(None, None)
-    )
+    monkeypatch.setattr(cli_module, "detect_environment", _environment_without_ffmpeg)
     code = run([VALID_URL, "--audio", "--audio-format", "mp3", "--output", str(tmp_path)])
     assert code == int(ExitCode.FFMPEG_REQUIRED)
     assert "FFmpeg" in flat(capsys.readouterr().err)
@@ -253,12 +272,101 @@ def test_missing_ffmpeg_warns_but_continues_for_video(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(
-        cli_module, "detect_ffmpeg", lambda _=None: cli_module.FFmpegStatus(None, None)
-    )
+    monkeypatch.setattr(cli_module, "detect_environment", _environment_without_ffmpeg)
     stub_downloader(result_path=tmp_path / "v.mp4")
     code = run([VALID_URL, "--output", str(tmp_path)])
     assert code == int(ExitCode.SUCCESS)
     err = capsys.readouterr().err
     assert "FFmpeg was not found" in flat(err)
     assert "pre-merged formats" in flat(err)
+
+
+# --- web mode and CLI compatibility ------------------------------------
+#
+# Making the positional URL optional is a parser-level necessity for --web.
+# These pin that it did not quietly turn a bare invocation into a no-op, and
+# that every previously valid command still parses exactly as before.
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        [VALID_URL],
+        [VALID_URL, "--audio"],
+        [VALID_URL, "--audio", "--audio-format", "mp3"],
+        [VALID_URL, "--quality", "1080"],
+        [VALID_URL, "--output", "/tmp/x"],
+        [VALID_URL, "--filename", "%(title)s.%(ext)s"],
+        [VALID_URL, "--info"],
+        [VALID_URL, "--overwrite"],
+        [VALID_URL, "--ffmpeg-location", "/opt/ffmpeg"],
+        [VALID_URL, "--verbose"],
+        [VALID_URL, "--quiet"],
+    ],
+)
+def test_every_released_invocation_still_parses(argv: list[str]) -> None:
+    args = build_parser().parse_args(argv)
+    assert args.url == VALID_URL
+    assert args.web is False
+
+
+def test_web_mode_parses_without_a_url() -> None:
+    args = build_parser().parse_args(["--web"])
+    assert args.web is True
+    assert args.url is None
+
+
+def test_a_bare_invocation_is_still_a_usage_error() -> None:
+    """The positional is optional only so --web can stand alone."""
+    with pytest.raises(SystemExit) as excinfo:
+        run([])
+    assert excinfo.value.code == int(ExitCode.USAGE_ERROR)
+
+
+def test_a_url_together_with_web_is_rejected_as_ambiguous() -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        run([VALID_URL, "--web"])
+    assert excinfo.value.code == int(ExitCode.USAGE_ERROR)
+
+
+def test_web_mode_starts_the_server_and_returns_its_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[Any] = []
+
+    def fake_serve(console: Any, **kwargs: Any) -> int:
+        calls.append(kwargs)
+        return 0
+
+    import media_downloader.web.launcher as launcher_module
+
+    monkeypatch.setattr(launcher_module, "serve", fake_serve)
+    assert run(["--web"]) == int(ExitCode.SUCCESS)
+    assert calls and calls[0]["verbose"] is False
+
+
+def test_web_mode_reports_a_failed_bind_instead_of_crashing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import media_downloader.web.launcher as launcher_module
+
+    monkeypatch.setattr(
+        launcher_module,
+        "serve",
+        lambda console, **kw: (_ for _ in ()).throw(OSError("address in use")),
+    )
+    assert run(["--web"]) == int(ExitCode.UNEXPECTED_ERROR)
+    assert "could not start" in flat(capsys.readouterr().err)
+
+
+def test_web_mode_handles_ctrl_c(monkeypatch: pytest.MonkeyPatch) -> None:
+    import media_downloader.web.launcher as launcher_module
+
+    monkeypatch.setattr(
+        launcher_module, "serve", lambda console, **kw: (_ for _ in ()).throw(KeyboardInterrupt())
+    )
+    assert run(["--web"]) == int(ExitCode.INTERRUPTED)
+
+
+def test_the_web_flag_is_documented() -> None:
+    assert "--web" in build_parser().format_help()

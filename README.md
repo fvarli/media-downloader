@@ -16,6 +16,7 @@ codes, safe filename and path handling, and behaviour that is identical on Linux
 ## Features
 
 - Give it a URL, get a file. One required argument, sensible defaults for everything else.
+- A local web interface (`--web`) for when a terminal is not the right tool.
 - Automatic service detection for the explicitly supported platforms.
 - Best available video quality by default, with video and audio merged automatically.
 - Audio-only extraction, keeping the original stream when no conversion is asked for.
@@ -265,6 +266,39 @@ python -m media_downloader "URL"
 
 All three forms are equivalent — `main.py` is a small shim around the same entry point.
 
+### Web interface
+
+If you would rather not use a terminal:
+
+```bash
+media-downloader --web
+```
+
+That starts a small local server, prints its address and opens your browser:
+
+```text
+Media Downloader is running at http://127.0.0.1:8765
+Saving downloads to /home/you/Downloads/Media Downloader
+Press Ctrl+C to stop.
+```
+
+Paste a link, pick Video or Audio, choose a quality and press Download. Progress, the finished file
+name and any error appear on the page, and the download folder can be opened from the footer.
+
+A few things worth knowing:
+
+- **It is not a website.** The server listens on `127.0.0.1` only, so nothing outside your computer
+  can reach it. There are no accounts and no database, and nothing is stored between runs -- the
+  download list covers the current session only.
+- **It saves to `~/Downloads/Media Downloader`**, not to `./downloads` like the CLI. A double-clicked
+  application has no meaningful working directory, so the web interface uses a predictable place.
+- **One download at a time.** Starting a second while one is running is refused with a clear message.
+- If no browser can be opened -- over SSH, in WSL, on a headless machine -- open the printed URL
+  yourself.
+- It is built on Python's standard-library HTTP server, which adds no dependencies and starts
+  instantly. The standard library notes that this server is not intended for internet-facing
+  production use; that is why it is bound to loopback and cannot be configured to listen elsewhere.
+
 ### Examples
 
 ```bash
@@ -332,6 +366,7 @@ operating systems.
 | `-v`, `--verbose` | Show debug output, including yt-dlp's own. |
 | `--quiet` | Print only the final path and errors. |
 | `--version` | Print the version and exit. |
+| `--web` | Start the local web interface instead of downloading. Cannot be combined with a URL. |
 | `-h`, `--help` | Show the built-in help. |
 
 `--verbose` and `--quiet` are mutually exclusive.
@@ -474,18 +509,32 @@ media-downloader/
 │       ├── naming.py             # Output directory and template validation
 │       ├── options.py            # Pure: request + tool status -> yt-dlp options
 │       ├── progress.py           # Progress rendering
-│       └── urls.py               # URL validation and service detection
+│       ├── service.py            # Shared application layer (CLI + web)
+│       ├── urls.py               # URL validation and service detection
+│       └── web/                  # Local web interface
+│           ├── api.py            # Endpoint handlers
+│           ├── jobs.py           # Download jobs and progress state
+│           ├── launcher.py       # Start server, open browser
+│           ├── security.py       # Localhost request guards
+│           ├── server.py         # HTTP server and routing
+│           ├── system.py         # Download folder, file manager, browser
+│           └── static/           # index.html, app.css, app.js
 └── tests/                        # Offline unit tests, one module per source module
 ```
 
 The layering is one-directional:
 
 ```text
-argv -> cli.py -> config.DownloadRequest -> options.build_ydl_opts -> downloader.Downloader
-             |                                    |                          |
-        urls / naming                 ffmpeg / jsruntime detection      yt_dlp.YoutubeDL
-                                                                              |
-                       cli prints the final path  <-- DownloadResult <--------+
+  CLI  --.
+         |
+         +--> service.py --> downloader.Downloader --> yt_dlp.YoutubeDL --> FFmpeg
+         |    (shared)              ^
+ Web UI -'                          |
+                       config / urls / naming / options
+
+Both front ends build the same DownloadRequest and use the same Downloader.
+There is exactly one download implementation: the web layer never invokes the
+CLI and never imports yt-dlp itself.
 ```
 
 `urls`, `naming`, `config`, `options`, `ffmpeg` and `jsruntime` are pure or nearly so, which is
@@ -535,6 +584,8 @@ These are accurate as of this version. They are limitations, not planned feature
 - **Single media item per invocation.** Playlists, channels and profile URLs are not expanded; if a
   URL resolves to a collection, only the first item is downloaded.
 - **No batch input.** One URL per run; no file-of-URLs mode.
+- **The web interface runs one download at a time**, with no queue, cancel or retry.
+- **The web interface keeps no history between runs.** Its session list is in memory only.
 - **No authentication.** No cookies, no browser-cookie extraction, no logins. Only publicly
   accessible media can be downloaded.
 - **No subtitle, thumbnail or metadata embedding.**
@@ -553,6 +604,8 @@ These are accurate as of this version. They are limitations, not planned feature
 Not implemented, and not promised:
 
 - Playlist and batch downloading
+- A download queue with cancel and retry in the web interface
+- Standalone builds for macOS, Windows and Linux
 - A raw `--format` passthrough for power users
 - Explicit, opt-in authentication for media the user is authorised to access
 - Subtitle and thumbnail options
@@ -561,8 +614,10 @@ Not implemented, and not promised:
 
 ## Security and privacy
 
-- **No shell execution.** yt-dlp is used as a Python library. No user input is ever passed to a
-  shell, and `shell=True` appears nowhere in the codebase.
+- **No shell execution.** yt-dlp is used as a Python library, and `shell=True` appears nowhere in
+  the codebase. The one place this project starts another program is "Open folder", which passes the
+  download directory to `xdg-open`, `open` or `os.startfile` as a single argument -- never a command
+  line, and never a path that came from the browser.
 - **URL validation.** Only absolute `http` and `https` URLs with a hostname are accepted. `file://`,
   `javascript:`, `data:` and anything containing control characters are rejected before use.
 - **No directory escape.** `--filename` accepts a bare file name only. Path separators, absolute
@@ -571,6 +626,12 @@ Not implemented, and not promised:
 - **No cookie or browser access.** Browser cookie extraction is not implemented and cannot be
   triggered accidentally. If authentication is added later it will be an explicit, documented,
   opt-in feature.
+- **The web interface is loopback-only.** It binds `127.0.0.1`, sends no CORS headers, requires a
+  per-session token generated at startup, rejects requests whose `Host` or `Origin` is not its own,
+  and requires JSON for anything that changes state. Together these stop other websites and
+  DNS-rebinding tricks from driving it.
+- **The browser cannot choose paths.** The download directory is fixed by the server and no endpoint
+  accepts a filesystem path. "Open folder" takes no argument and can open only that one directory.
 - **No telemetry.** Nothing is collected, and nothing is sent anywhere except to the media host, by
   yt-dlp, in order to fetch what you asked for.
 - **No credentials on disk.** The project stores no tokens or secrets. `.gitignore` already excludes

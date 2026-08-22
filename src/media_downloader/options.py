@@ -61,6 +61,7 @@ def build_ydl_opts(
     js_runtime: JSRuntimeStatus | None = None,
     progress_hooks: list[Any] | None = None,
     post_hooks: list[Any] | None = None,
+    postprocessor_hooks: list[Any] | None = None,
     quiet: bool = True,
 ) -> dict[str, Any]:
     """Build the complete yt-dlp options dictionary for ``request``.
@@ -127,6 +128,10 @@ def build_ydl_opts(
         opts["progress_hooks"] = progress_hooks
     if post_hooks:
         opts["post_hooks"] = post_hooks
+    # Reports the FFmpeg merge and audio-conversion phase, which produces no
+    # download progress events but can take a noticeable amount of time.
+    if postprocessor_hooks:
+        opts["postprocessor_hooks"] = postprocessor_hooks
 
     opts.update(request.extra_ydl_opts)
     return opts

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="md-token" content="__MD_TOKEN__">
+<title>Media Downloader</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⬇️</text></svg>">
+</head>
+<body>
+<main class="app">
+  <header class="app__header">
+    <h1>Media Downloader</h1>
+    <p class="app__subtitle">Paste a public media link and download it.</p>
+  </header>
+
+  <form class="card form" id="form" autocomplete="off">
+    <label class="field">
+      <span class="field__label">Media URL</span>
+      <div class="field__row">
+        <input class="input" id="url" type="url" inputmode="url" spellcheck="false"
+               placeholder="https://www.youtube.com/watch?v=..." required>
+        <button class="button button--ghost" id="paste" type="button" hidden>Paste</button>
+      </div>
+    </label>
+
+    <div class="field">
+      <span class="field__label">Type</span>
+      <div class="segmented" role="radiogroup" aria-label="Download type">
+        <button type="button" class="segmented__option is-active" id="mode-video"
+                role="radio" aria-checked="true">Video</button>
+        <button type="button" class="segmented__option" id="mode-audio"
+                role="radio" aria-checked="false">Audio</button>
+      </div>
+    </div>
+
+    <label class="field" id="quality-field">
+      <span class="field__label">Quality</span>
+      <select class="input" id="quality"></select>
+    </label>
+
+    <label class="field" id="audio-format-field" hidden>
+      <span class="field__label">Audio format</span>
+      <select class="input" id="audio-format"></select>
+    </label>
+
+    <button class="button button--primary" id="submit" type="submit">Download</button>
+  </form>
+
+  <section class="card status" id="status" hidden aria-live="polite"></section>
+
+  <section class="recent" id="recent" hidden>
+    <h2 class="recent__title">This session</h2>
+    <ul class="recent__list" id="recent-list"></ul>
+  </section>
+
+  <footer class="app__footer">
+    <p id="services"></p>
+    <p class="app__path">Saving to <button class="linklike" id="open-folder" type="button"><span id="download-dir"></span></button></p>
+  </footer>
+</main>
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>

@@ -15,20 +15,19 @@ from media_downloader.config import (
     ENV_OUTPUT_DIR,
     LOSSLESS_AUDIO_FORMAT,
     QUALITY_CHOICES,
-    DownloadRequest,
     build_request,
     default_output_dir,
 )
-from media_downloader.downloader import Downloader, MediaInfo
+from media_downloader.downloader import MediaInfo
 from media_downloader.errors import ExitCode, MediaDownloaderError
-from media_downloader.ffmpeg import FFMPEG_GUIDANCE, FFmpegStatus, detect_ffmpeg
-from media_downloader.jsruntime import (
-    JS_RUNTIME_GUIDANCE,
-    JSRuntimeStatus,
-    detect_js_runtime,
-)
 from media_downloader.logging_setup import configure_logging
 from media_downloader.progress import ProgressReporter
+from media_downloader.service import (
+    Notice,
+    create_downloader,
+    detect_environment,
+    environment_notices,
+)
 from media_downloader.urls import SUPPORTED_SERVICE_NAMES, detect_service, validate_url
 
 PROGRAM_NAME = "media-downloader"
@@ -58,7 +57,11 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("url", help="Public http(s) URL of the media to download.")
+    # nargs="?" only so that --web can be given on its own. run() still
+    # requires exactly one of URL or --web, so a bare invocation stays an error.
+    parser.add_argument(
+        "url", nargs="?", default=None, help="Public http(s) URL of the media to download."
+    )
     parser.add_argument(
         "-o",
         "--output",
@@ -112,6 +115,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--overwrite",
         action="store_true",
         help="Overwrite an existing file instead of keeping it.",
+    )
+    parser.add_argument(
+        "--web",
+        action="store_true",
+        help="Open the local web interface in a browser instead of downloading.",
     )
 
     verbosity = parser.add_mutually_exclusive_group()
@@ -185,34 +193,22 @@ def _announce_service(console: Console, url: str, *, quiet: bool) -> None:
         )
 
 
-def _warn_about_missing_tools(
-    console: Console,
-    request: DownloadRequest,
-    ffmpeg: FFmpegStatus,
-    js_runtime: JSRuntimeStatus,
-    *,
-    quiet: bool,
-) -> None:
-    """Explain, once and in plain language, what missing tools will cost."""
+_NOTICE_PREFIX = {"warning": "[yellow]Warning:[/yellow]", "info": "[yellow]Continuing:[/yellow]"}
+
+
+def _render_notices(console: Console, notices: Sequence[Notice], *, quiet: bool) -> None:
+    """Print the degradation notices produced by the service layer.
+
+    The wording itself lives in media_downloader.service, so the CLI and the
+    web UI cannot drift apart; only the styling is decided here.
+    """
     if quiet:
         return
-
-    if not ffmpeg.available:
-        console.print(f"[yellow]Warning:[/yellow] {FFMPEG_GUIDANCE}")
-        # An explicit conversion request is about to be refused outright, so
-        # promising to continue would contradict the error that follows.
-        if not request.needs_audio_conversion:
-            fallback = (
-                "the original audio stream will be saved as-is, without conversion."
-                if request.audio_only
-                else "only pre-merged formats will be used, so the available "
-                "quality may be lower than usual."
-            )
-            console.print(f"[yellow]Continuing:[/yellow] {fallback}")
-
-    service = detect_service(request.url)
-    if service is not None and service.key == "youtube" and not js_runtime.available:
-        console.print(f"[yellow]Warning:[/yellow] {JS_RUNTIME_GUIDANCE}")
+    for notice in notices:
+        prefix = _NOTICE_PREFIX.get(notice.level, "")
+        # "Continuing: " is already carried in the message text.
+        message = notice.message.removeprefix("Continuing: ")
+        console.print(f"{prefix} {message}")
 
 
 def run(argv: Sequence[str] | None = None) -> int:
@@ -223,6 +219,25 @@ def run(argv: Sequence[str] | None = None) -> int:
     console = Console(stderr=True)
     out_console = Console()
     configure_logging(console, verbose=args.verbose, quiet=args.quiet)
+
+    # Exactly one mode. Making the URL optional must not turn a bare
+    # `media-downloader` into a valid no-op, and a URL with --web is ambiguous
+    # about what the user wanted, so both are usage errors.
+    if args.web and args.url is not None:
+        parser.error("--web starts the web interface and cannot be combined with a URL.")
+    if not args.web and args.url is None:
+        parser.error("a URL is required (or use --web for the web interface).")
+
+    if args.web:
+        from media_downloader.web.launcher import serve
+
+        try:
+            return serve(console, verbose=args.verbose)
+        except KeyboardInterrupt:
+            return int(ExitCode.INTERRUPTED)
+        except OSError as exc:
+            console.print(f"[red]Error:[/red] The web interface could not start: {exc}")
+            return int(ExitCode.UNEXPECTED_ERROR)
 
     try:
         url = validate_url(args.url)
@@ -239,23 +254,17 @@ def run(argv: Sequence[str] | None = None) -> int:
         )
 
         _announce_service(console, url, quiet=args.quiet)
-        ffmpeg = detect_ffmpeg(request.ffmpeg_location)
-        js_runtime = detect_js_runtime()
+        env = detect_environment(request.ffmpeg_location)
 
         if request.info_only:
-            downloader = Downloader(ffmpeg, js_runtime=js_runtime, verbose=args.verbose)
+            downloader = create_downloader(env, verbose=args.verbose)
             _print_info(out_console, downloader.fetch_info(request))
             return int(ExitCode.SUCCESS)
 
-        _warn_about_missing_tools(console, request, ffmpeg, js_runtime, quiet=args.quiet)
+        _render_notices(console, environment_notices(request, env), quiet=args.quiet)
 
         with ProgressReporter(console, enabled=not args.quiet) as reporter:
-            downloader = Downloader(
-                ffmpeg,
-                js_runtime=js_runtime,
-                progress_hook=reporter.hook,
-                verbose=args.verbose,
-            )
+            downloader = create_downloader(env, progress_hook=reporter.hook, verbose=args.verbose)
             result = downloader.download(request)
 
         if not args.quiet:
