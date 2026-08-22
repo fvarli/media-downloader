@@ -123,6 +123,15 @@ _ERROR_CODES: dict[type[MediaDownloaderError], str] = {
 }
 
 
+def register_error_code(exc_type: type[MediaDownloaderError], code: str) -> None:
+    """Register a wire code for an exception defined outside this module.
+
+    Keeps the mapping explicit and in one place while letting other subsystems
+    contribute their own codes without importing them here.
+    """
+    _ERROR_CODES[exc_type] = code
+
+
 def _error_code(exc: MediaDownloaderError) -> str:
     """Map an exception to its wire code, most specific class first."""
     for klass in type(exc).__mro__:

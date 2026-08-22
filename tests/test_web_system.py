@@ -147,3 +147,71 @@ def test_current_platform_reports_the_real_platform() -> None:
     import sys
 
     assert system.current_platform() == sys.platform
+
+
+# --- startup-address fallback ------------------------------------------
+#
+# A packaged double-clickable app has no console, so a printed URL would be
+# invisible if the browser could not be opened.
+
+
+def test_windows_shows_a_message_box(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[Any, ...]] = []
+
+    class FakeUser32:
+        @staticmethod
+        def MessageBoxW(*args: Any) -> int:  # noqa: N802 - Win32 naming
+            calls.append(args)
+            return 1
+
+    monkeypatch.setattr(system, "current_platform", lambda: "win32")
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "ctypes",
+        type("C", (), {"windll": type("W", (), {"user32": FakeUser32})}),
+    )
+    system.report_startup_url("http://127.0.0.1:8765")
+    assert calls and "http://127.0.0.1:8765" in calls[0][1]
+
+
+def test_macos_uses_osascript_with_an_argument_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[Any] = []
+    monkeypatch.setattr(system, "current_platform", lambda: "darwin")
+    monkeypatch.setattr(
+        system.subprocess,
+        "run",
+        lambda command, **kw: captured.append((command, kw)) or None,
+    )
+    system.report_startup_url("http://127.0.0.1:8765")
+
+    command, kwargs = captured[0]
+    assert isinstance(command, list)
+    assert command[0] == "osascript"
+    assert "http://127.0.0.1:8765" in command[-1]
+    assert kwargs.get("shell") is not True
+
+
+def test_linux_falls_back_to_stderr(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(system, "current_platform", lambda: "linux")
+    system.report_startup_url("http://127.0.0.1:8765")
+    assert "http://127.0.0.1:8765" in capsys.readouterr().err
+
+
+def test_a_failing_dialog_is_never_fatal(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The server is already running; a dialog failure must not stop it."""
+    monkeypatch.setattr(system, "current_platform", lambda: "darwin")
+    monkeypatch.setattr(
+        system.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(OSError("no osascript"))
+    )
+    system.report_startup_url("http://127.0.0.1:8765")
+    assert "http://127.0.0.1:8765" in capsys.readouterr().err
+
+
+def test_applescript_quoting_escapes_dangerous_characters() -> None:
+    quoted = system._applescript_string('say "hi" \\ then')
+    assert quoted.startswith('"') and quoted.endswith('"')
+    assert '\\"' in quoted

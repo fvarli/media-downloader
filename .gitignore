@@ -30,6 +30,13 @@ dist/
 .eggs/
 *.egg
 
+# PyInstaller working files. The spec under packaging/ is source and stays
+# tracked; only generated output is ignored.
+*.spec.bak
+packaging/build/
+packaging/dist/
+packaging/__pycache__/
+
 # --- Local environment and configuration -----------------------------------
 .env
 .env.*

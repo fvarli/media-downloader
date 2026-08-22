@@ -268,3 +268,48 @@ def test_address_reuse_matches_the_platform_semantics() -> None:
     from media_downloader.web.server import _Server
 
     assert _Server.allow_reuse_address is (sys.platform != "win32")
+
+
+# --- tool routes -------------------------------------------------------
+
+
+def test_tools_endpoint_requires_the_session_token(live_server: WebServer) -> None:
+    assert call(live_server, "/api/tools")[0] == 403
+    assert call(live_server, "/api/tools", token=live_server.token)[0] == 200
+
+
+def test_tools_are_listed_over_http(live_server: WebServer) -> None:
+    status, body, _ = call(live_server, "/api/tools", token=live_server.token)
+    payload = json.loads(body)
+    assert status == 200
+    assert {t["tool"] for t in payload["tools"]} == {"ffmpeg", "deno"}
+
+
+def test_installing_an_unknown_tool_is_404_over_http(live_server: WebServer) -> None:
+    status, body, _ = call(
+        live_server,
+        "/api/tools/curl/install",
+        method="POST",
+        token=live_server.token,
+        body="{}",
+    )
+    assert status == 404
+    assert json.loads(body)["error"]["code"] == "NOT_FOUND"
+
+
+def test_a_traversal_style_tool_name_is_refused(live_server: WebServer) -> None:
+    """The route segment is matched against a fixed set, never a path."""
+    for name in ["..%2f..%2fetc", "../../etc/passwd"]:
+        status, _, _ = call(
+            live_server,
+            f"/api/tools/{name}/install",
+            method="POST",
+            token=live_server.token,
+            body="{}",
+        )
+        assert status == 404
+
+
+def test_tool_install_needs_the_token_too(live_server: WebServer) -> None:
+    status, _, _ = call(live_server, "/api/tools/ffmpeg/install", method="POST", body="{}")
+    assert status == 403

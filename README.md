@@ -299,6 +299,8 @@ A few things worth knowing:
 - **There is no Docker and no container.** The page is served by the same Python installation that
   runs the CLI, so if you can run `media-downloader`, you can run this -- there is nothing else to
   install or configure.
+- **It can install FFmpeg and Deno for you, but only if you ask.** See
+  [Optional tools](#optional-tools) below.
 - It is built on Python's standard-library HTTP server, which adds no dependencies and starts
   instantly. The standard library notes that this server is not intended for internet-facing
   production use; that is why it is bound to loopback and cannot be configured to listen elsewhere.
@@ -393,6 +395,32 @@ whitespace debris is tidied up. Text is never transliterated, so Turkish and oth
 stay readable. The media ID is always appended, which keeps names unique and traceable back to their
 source; if cleaning leaves no usable title, the uploader or service name is used instead.
 
+### Optional tools
+
+FFmpeg and a JavaScript runtime both make downloads better, and neither can be installed with `pip`.
+If one is missing, the web interface can fetch it for you -- and only then:
+
+- **nothing is downloaded unless you click the button.** There is no prompt at startup, and
+  declining is always safe: everything that does not need that tool keeps working exactly as before.
+- the download comes from a **fixed, pinned URL over HTTPS** recorded in the source tree; the browser
+  cannot name a URL, a version or a location.
+- the file's **SHA-256 is verified before anything is unpacked**, and nothing is ever executed before
+  it verifies. A failed download or a mismatched checksum is deleted, leaving nothing behind.
+- it is stored in this application's own directory. **`PATH` is never modified, nothing is installed
+  system-wide, and no step needs administrator rights.**
+- a tool you already have installed is always preferred over a downloaded copy.
+
+| OS | Where they are kept |
+| --- | --- |
+| Linux | `~/.local/share/media-downloader/tools/` (or `$XDG_DATA_HOME`) |
+| macOS | `~/Library/Application Support/Media Downloader/tools/` |
+| Windows | `%LOCALAPPDATA%\Media Downloader\tools\` |
+
+Deleting that folder undoes the installation completely.
+
+The CLI never downloads a tool. It uses one if it finds it, and otherwise behaves exactly as it
+always has.
+
 Passing `--filename` turns this off completely — your template is used exactly as written, subject
 only to the safety checks that keep output inside `--output`.
 
@@ -479,6 +507,25 @@ All three are configured in `pyproject.toml` and currently pass cleanly.
 
 Without activating the environment, prefix each command with the interpreter path — for example
 `.venv/bin/python -m pytest` on Linux and macOS, or `.venv\Scripts\python.exe -m pytest` on Windows.
+
+### Building a standalone artifact (Linux, in development)
+
+Work has started on standalone builds that need no Python installed. **Nothing is released yet** --
+this is a development-only build, verified on Linux x86_64 and nowhere else.
+
+```bash
+python -m pip install -e ".[dev,packaging]"
+python -m PyInstaller packaging/media-downloader.spec --noconfirm
+```
+
+The result is a self-contained directory in `dist/media-downloader/` holding the executable and its
+`_internal/` support files. Run `dist/media-downloader/media-downloader --web` to start it; it needs
+neither the virtual environment nor a system Python.
+
+FFmpeg and Deno are deliberately **not** bundled -- see [Optional tools](#optional-tools).
+
+Not yet done, and not promised: macOS and Windows builds, code signing, notarization, installers,
+and published binaries.
 
 ### Continuous integration
 
@@ -590,6 +637,8 @@ These are accurate as of this version. They are limitations, not planned feature
 - **No batch input.** One URL per run; no file-of-URLs mode.
 - **The web interface runs one download at a time**, with no queue, cancel or retry.
 - **The web interface keeps no history between runs.** Its session list is in memory only.
+- **Standalone builds are development-only.** A Linux artifact can be built and has been
+  verified; macOS and Windows builds, signing and published binaries do not exist yet.
 - **No authentication.** No cookies, no browser-cookie extraction, no logins. Only publicly
   accessible media can be downloaded.
 - **No subtitle, thumbnail or metadata embedding.**

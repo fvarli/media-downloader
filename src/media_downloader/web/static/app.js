@@ -9,6 +9,9 @@ const POLL_MS = 500;
 
 const state = {
   config: null,
+  tools: [],
+  dismissed: new Set(),
+  offer: null,
   mode: 'video',
   job: null,
   history: [],
@@ -25,6 +28,7 @@ const el = {
   submit: $('submit'), status: $('status'),
   recent: $('recent'), recentList: $('recent-list'),
   services: $('services'), downloadDir: $('download-dir'), openFolder: $('open-folder'),
+  tool: $('tool'),
 };
 
 // --- api -----------------------------------------------------------
@@ -175,9 +179,110 @@ function renderControls() {
   el.submit.textContent = state.busy ? 'Downloading…' : 'Download';
 }
 
+function formatSize(bytes) {
+  return bytes ? `${Math.round(bytes / 1e6)} MB` : '';
+}
+
+// The prompt appears only when a tool is genuinely relevant: FFmpeg when the
+// user picks a mode that needs it, Deno only once a YouTube download has shown
+// it is required. Never at startup, and never twice after "Not now".
+function renderTool() {
+  const name = state.offer;
+  const tool = name && state.tools.find((t) => t.tool === name);
+  if (!tool || state.dismissed.has(name) || (tool.available && tool.state !== 'installing')) {
+    el.tool.hidden = true;
+    return;
+  }
+
+  el.tool.hidden = false;
+  el.tool.className = 'card tool';
+  el.tool.innerHTML = '';
+
+  const label = name === 'ffmpeg' ? 'FFmpeg' : 'a JavaScript runtime (Deno)';
+
+  if (tool.state === 'installing') {
+    el.tool.classList.add('tool--busy');
+    el.tool.append(text('tool__title', `Downloading ${label}…`));
+    el.tool.append(text('tool__why', 'This happens once. You can keep using the app meanwhile.'));
+    return;
+  }
+  if (tool.state === 'unsupported') {
+    el.tool.append(text('tool__title', `${label} cannot be installed automatically here`));
+    el.tool.append(text('tool__why', 'Install it with your system package manager instead.'));
+    return;
+  }
+
+  if (tool.error) el.tool.classList.add('tool--error');
+  el.tool.append(text('tool__title', tool.error ? `Could not install ${label}` : `Install ${label}?`));
+  el.tool.append(text('tool__why', tool.error || tool.purpose));
+
+  const meta = [tool.version, formatSize(tool.size_bytes), tool.licence]
+    .filter(Boolean).join(' · ');
+  if (meta) el.tool.append(text('tool__meta', meta));
+
+  const actions = document.createElement('div');
+  actions.className = 'tool__actions';
+
+  const install = document.createElement('button');
+  install.type = 'button';
+  install.className = 'button button--primary';
+  install.textContent = tool.error ? 'Try again' : `Download ${label.split(' ')[0]}`;
+  install.addEventListener('click', () => installTool(name));
+
+  const dismiss = document.createElement('button');
+  dismiss.type = 'button';
+  dismiss.className = 'button button--ghost';
+  dismiss.textContent = 'Not now';
+  dismiss.addEventListener('click', () => {
+    state.dismissed.add(name);
+    render();
+  });
+
+  actions.append(install, dismiss);
+  el.tool.append(actions);
+}
+
+async function refreshTools() {
+  try {
+    state.tools = (await api('/api/tools')).tools;
+  } catch {
+    state.tools = [];
+  }
+}
+
+// Offer a tool only when something has actually shown it is needed.
+function considerOffering(name) {
+  const tool = state.tools.find((t) => t.tool === name);
+  if (tool && !tool.available && !state.dismissed.has(name)) {
+    state.offer = name;
+  }
+}
+
+async function installTool(name) {
+  try {
+    await api(`/api/tools/${encodeURIComponent(name)}/install`, {
+      method: 'POST',
+      body: '{}',
+    });
+  } catch (err) {
+    state.error = { message: err.message, hint: err.hint };
+    render();
+    return;
+  }
+  // Poll until the install settles, then re-render.
+  while (true) {
+    await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+    await refreshTools();
+    render();
+    const tool = state.tools.find((t) => t.tool === name);
+    if (!tool || tool.state !== 'installing') return;
+  }
+}
+
 function render() {
   renderControls();
   renderStatus();
+  renderTool();
   renderRecent();
 }
 
@@ -235,6 +340,9 @@ async function startDownload(event) {
     state.job = job;
     render();
     const finished = await poll(job.id);
+    await refreshTools();
+    // A YouTube download is the only thing that reveals a JS runtime is needed.
+    if (/youtu\.?be/i.test(el.url.value || finished.url || '')) considerOffering('deno');
     state.history = [finished, ...state.history.filter((j) => j.id !== finished.id)];
     if (finished.state === 'completed') el.url.value = '';
   } catch (err) {
@@ -258,7 +366,12 @@ async function pasteFromClipboard() {
 
 el.form.addEventListener('submit', startDownload);
 el.modeVideo.addEventListener('click', () => { state.mode = 'video'; render(); });
-el.modeAudio.addEventListener('click', () => { state.mode = 'audio'; render(); });
+el.modeAudio.addEventListener('click', () => {
+  state.mode = 'audio';
+  // Converting audio is exactly when FFmpeg starts to matter.
+  considerOffering('ffmpeg');
+  render();
+});
 el.openFolder.addEventListener('click', async () => {
   try { await api('/api/open-folder', { method: 'POST', body: '{}' }); }
   catch (err) { state.error = { message: err.message, hint: err.hint }; render(); }
@@ -269,7 +382,12 @@ if (navigator.clipboard?.readText) {
   el.paste.addEventListener('click', pasteFromClipboard);
 }
 
-loadConfig().then(render).catch((err) => {
+loadConfig().then(refreshTools).then(() => {
+  // Startup never prompts. FFmpeg is only surfaced here if it is missing and
+  // therefore already limiting every download the user is about to make.
+  if (state.config && !state.config.ffmpeg_available) considerOffering('ffmpeg');
+  render();
+}).catch((err) => {
   state.error = { message: err.message, hint: err.hint };
   render();
 });

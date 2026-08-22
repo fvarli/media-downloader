@@ -33,6 +33,7 @@ from media_downloader.web.security import (
     RequestGuard,
     generate_token,
 )
+from media_downloader.web.tools import ToolInstaller
 
 logger = get_logger("web.server")
 
@@ -222,6 +223,9 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/downloads":
             self._send_json(*api.list_downloads(self._ctx))
             return
+        if path == "/api/tools":
+            self._send_json(*api.get_tools(self._ctx))
+            return
         if path.startswith("/api/downloads/"):
             self._send_json(*api.get_download(self._ctx, path.removeprefix("/api/downloads/")))
             return
@@ -251,6 +255,13 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(*api.open_download_folder(self._ctx))
             return
 
+        # The tool name is a fixed route segment, never a request parameter, so
+        # the browser cannot name a URL, version or filesystem location.
+        if path.startswith("/api/tools/") and path.endswith("/install"):
+            tool = path.removeprefix("/api/tools/").removesuffix("/install")
+            self._send_json(*api.install_tool(self._ctx, tool))
+            return
+
         self._send_json(HTTPStatus.NOT_FOUND, {"error": {"code": "NOT_FOUND", "message": path}})
 
 
@@ -260,6 +271,7 @@ class WebServer:
     def __init__(self, config: WebAppConfig) -> None:
         self.config = config
         self.jobs = build_job_manager(config)
+        self.tools = ToolInstaller()
         self.token = generate_token()
         # ThreadingHTTPServer.shutdown() blocks until serve_forever() returns,
         # so calling it on a server that never started would deadlock. Track
@@ -275,6 +287,7 @@ class WebServer:
                 jobs=self.jobs,
                 environment=config.environment,
                 download_dir=config.download_dir,
+                tools=self.tools,
             ),
             guard=self.guard,
         )

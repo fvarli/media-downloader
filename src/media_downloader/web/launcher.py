@@ -14,10 +14,20 @@ from rich.console import Console
 
 from media_downloader.service import detect_environment
 from media_downloader.web.server import PREFERRED_PORT, WebAppConfig, WebServer
-from media_downloader.web.system import default_download_dir, open_browser
+from media_downloader.web.system import (
+    default_download_dir,
+    open_browser,
+    report_startup_url,
+)
 
 #: Give the server a moment to accept connections before the browser asks.
 BROWSER_DELAY_SECONDS = 0.4
+
+
+def _launch_browser(url: str) -> None:
+    """Open the browser, or make sure the user sees the address regardless."""
+    if not open_browser(url):
+        report_startup_url(url)
 
 
 def serve(
@@ -44,8 +54,9 @@ def serve(
 
     if open_browser_on_start:
         # Deferred so the socket is definitely accepting before the browser
-        # asks; a failure here is non-fatal, the URL above is the fallback.
-        threading.Timer(BROWSER_DELAY_SECONDS, open_browser, args=(server.url,)).start()
+        # asks. If no browser can be opened -- headless, SSH, or a packaged app
+        # with no console -- the address is surfaced some other way instead.
+        threading.Timer(BROWSER_DELAY_SECONDS, _launch_browser, args=(server.url,)).start()
 
     try:
         server.serve_forever()

@@ -67,7 +67,34 @@ def detect_ffmpeg(explicit_location: str | Path | None = None) -> FFmpegStatus:
 
     ffmpeg = shutil.which("ffmpeg")
     ffprobe = shutil.which("ffprobe")
+    if ffmpeg and ffprobe:
+        return FFmpegStatus(ffmpeg=Path(ffmpeg), ffprobe=Path(ffprobe))
+
+    # Nothing usable on PATH: fall back to a copy the user asked us to install.
+    # This is a pure lookup -- it never downloads anything.
+    managed = _managed_ffmpeg_dir()
+    if managed is not None:
+        return FFmpegStatus(
+            ffmpeg=_find_in_dir(managed, "ffmpeg"),
+            ffprobe=_find_in_dir(managed, "ffprobe"),
+        )
+
     return FFmpegStatus(
         ffmpeg=Path(ffmpeg) if ffmpeg else None,
         ffprobe=Path(ffprobe) if ffprobe else None,
     )
+
+
+def _managed_ffmpeg_dir() -> Path | None:
+    """Directory of an installed managed FFmpeg, if there is a complete one.
+
+    Imported lazily to keep this module free of an import cycle: the tools
+    package depends on paths, which depends on the platform seam.
+    """
+    try:
+        from media_downloader.tools.manager import ToolManager
+        from media_downloader.tools.manifest import FFMPEG
+
+        return ToolManager().managed_dir(FFMPEG)
+    except Exception:  # pragma: no cover - discovery must never break startup
+        return None

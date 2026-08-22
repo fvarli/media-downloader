@@ -104,6 +104,49 @@ def open_folder(directory: Path) -> None:
         ) from exc
 
 
+def report_startup_url(url: str) -> None:
+    """Show the local address when a browser could not be opened for it.
+
+    A packaged double-clickable application has no console, so the address
+    printed at startup would go nowhere. Rather than leave the user staring at
+    nothing, put it somewhere they will actually see.
+
+    Best effort by design: failing to show a dialog must never stop the server
+    that is already running and usable.
+    """
+    message = f"Media Downloader is running.\n\nOpen this address in your browser:\n{url}"
+    platform = current_platform()
+    try:
+        if platform == "win32":
+            import ctypes
+
+            # getattr for the same reason as os.startfile above: windll does
+            # not exist off Windows, so direct access fails type checking on
+            # Linux and macOS. MB_OK | MB_ICONINFORMATION; a message box takes
+            # no command line, so nothing in the text is parsed as syntax.
+            windll = getattr(ctypes, "windll")  # noqa: B009
+            windll.user32.MessageBoxW(None, message, "Media Downloader", 0x40)
+            return
+        if platform == "darwin":
+            script = (
+                f"display dialog {_applescript_string(message)} "
+                'with title "Media Downloader" buttons {"OK"} default button "OK"'
+            )
+            # argv list, never a shell string.
+            subprocess.run(["osascript", "-e", script], check=False)
+            return
+    except Exception:  # pragma: no cover - a dialog must never be fatal
+        logger.debug("Could not display the startup address dialog.")
+    # Linux, and the fallback everywhere else, is the console we already have.
+    print(message, file=sys.stderr)
+
+
+def _applescript_string(value: str) -> str:
+    """Quote a string for AppleScript, escaping backslashes and quotes."""
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+    return f'"{escaped}"'
+
+
 def open_browser(url: str) -> bool:
     """Open ``url`` in the user's default browser.
 

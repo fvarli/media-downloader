@@ -48,6 +48,9 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
 ]
+# Building standalone artifacts. Never a runtime dependency: the frozen
+# application does not contain PyInstaller, only its bootloader.
+packaging = ["pyinstaller>=6.22,<7"]
 
 [project.scripts]
 media-downloader = "media_downloader.cli:main"

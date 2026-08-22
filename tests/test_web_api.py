@@ -12,8 +12,10 @@ from media_downloader.downloader import DownloadResult, MediaInfo
 from media_downloader.ffmpeg import FFmpegStatus
 from media_downloader.jsruntime import JSRuntimeStatus
 from media_downloader.service import Environment
+from media_downloader.tools.manager import ToolManager
 from media_downloader.web import api
 from media_downloader.web.jobs import JobManager, JobState
+from media_downloader.web.tools import ToolInstaller
 
 SAMPLE_INFO = MediaInfo(
     title="Example", uploader="Someone", duration_seconds=5, extractor="Twitter", webpage_url=""
@@ -45,7 +47,22 @@ def make_context(
     manager = JobManager(
         lambda **hooks: FakeDownloader(tmp_path / "Example - 1.mp4", block=block, **hooks)
     )
-    return api.ApiContext(jobs=manager, environment=env, download_dir=tmp_path / "out")
+    return api.ApiContext(
+        jobs=manager,
+        environment=env,
+        download_dir=tmp_path / "out",
+        tools=ToolInstaller(_offline_tool_manager(tmp_path)),
+    )
+
+
+def _offline_tool_manager(tmp_path: Path) -> ToolManager:
+    """A tool manager that can never reach the network, for API tests."""
+    return ToolManager(
+        env={"XDG_DATA_HOME": str(tmp_path / "data")},
+        fetcher=lambda url, dest, **kw: pytest.fail("an API test tried to download"),
+        platform_name=lambda: "linux",
+        machine=lambda: "x86_64",
+    )
 
 
 # -- config -------------------------------------------------------------

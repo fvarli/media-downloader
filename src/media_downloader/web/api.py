@@ -27,6 +27,7 @@ from media_downloader.service import Environment, environment_notices
 from media_downloader.urls import SUPPORTED_SERVICE_NAMES, detect_service, validate_url
 from media_downloader.web.jobs import DownloadInProgressError, JobManager
 from media_downloader.web.system import open_folder
+from media_downloader.web.tools import ToolInstaller
 
 #: Exception -> HTTP status for failures detected while handling the request.
 #: Failures that happen *during* a download are reported on the job instead,
@@ -36,6 +37,7 @@ _STATUS_FOR_CODE: dict[str, int] = {
     "OUTPUT_ERROR": 400,
     "FFMPEG_REQUIRED": 400,
     "DOWNLOAD_IN_PROGRESS": 409,
+    "TOOL_INSTALL": 409,
 }
 
 
@@ -46,6 +48,7 @@ class ApiContext:
     jobs: JobManager
     environment: Environment
     download_dir: Path
+    tools: ToolInstaller
 
 
 def error_payload(exc: MediaDownloaderError) -> tuple[int, dict[str, Any]]:
@@ -163,6 +166,38 @@ def get_download(ctx: ApiContext, job_id: str) -> tuple[int, dict[str, Any]]:
 def list_downloads(ctx: ApiContext) -> tuple[int, dict[str, Any]]:
     """This session's downloads, newest first. Nothing is persisted to disk."""
     return 200, {"downloads": [job.snapshot() for job in ctx.jobs.history()]}
+
+
+def get_tools(ctx: ApiContext) -> tuple[int, dict[str, Any]]:
+    """Report where each optional tool comes from, and whether we can install it.
+
+    This is a pure query: asking never downloads anything.
+    """
+    return 200, {"tools": ctx.tools.snapshot()}
+
+
+def install_tool(ctx: ApiContext, tool: str) -> tuple[int, dict[str, Any]]:
+    """Begin installing one optional tool, on the user's explicit request.
+
+    The tool name comes from a fixed route segment, never from a request body,
+    so the browser cannot name a URL, a version or a filesystem location. It is
+    checked against the known set before anything else happens.
+    """
+    if tool not in ctx.tools.known_tools:
+        return 404, {
+            "error": {
+                "code": "NOT_FOUND",
+                "message": f"Unknown tool: {tool}",
+                "hint": None,
+            }
+        }
+
+    try:
+        ctx.tools.start_install(tool)
+    except MediaDownloaderError as exc:
+        return error_payload(exc)
+
+    return 202, {"tools": ctx.tools.snapshot()}
 
 
 def open_download_folder(ctx: ApiContext) -> tuple[int, dict[str, Any] | None]:
