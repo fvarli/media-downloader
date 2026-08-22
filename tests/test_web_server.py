@@ -253,3 +253,18 @@ def test_the_job_manager_is_wired_to_the_shared_service_layer(tmp_path: Path) ->
     manager = server_module.build_job_manager(config)
     built: Any = manager._downloader_factory(progress_hook=None, postprocessor_hook=None)
     assert isinstance(built, Downloader)
+
+
+def test_address_reuse_matches_the_platform_semantics() -> None:
+    """SO_REUSEADDR means different things on POSIX and Windows.
+
+    On POSIX it only allows rebinding a port in TIME_WAIT, which is what we
+    want after a restart. On Windows it allows binding a port that is already
+    actively listening, which would let a second instance silently share the
+    port instead of falling back to a free one.
+    """
+    import sys
+
+    from media_downloader.web.server import _Server
+
+    assert _Server.allow_reuse_address is (sys.platform != "win32")

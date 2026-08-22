@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import socket
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -88,6 +89,22 @@ def build_job_manager(config: WebAppConfig) -> JobManager:
         return create_downloader(config.environment, verbose=config.verbose, **hooks)
 
     return JobManager(factory)
+
+
+class _Server(ThreadingHTTPServer):
+    """Loopback HTTP server with portable address-reuse semantics.
+
+    socketserver sets ``allow_reuse_address`` unconditionally, but the flag
+    means different things per platform. On POSIX, SO_REUSEADDR only lets us
+    rebind a port still in TIME_WAIT -- it will not attach to a live listener,
+    so it is exactly what we want for a quick restart. On Windows the same
+    flag lets a second socket bind a port that is *already actively listening*,
+    which would let a second instance silently share port 8765 instead of
+    falling back to a free one. So it is disabled there.
+    """
+
+    allow_reuse_address = sys.platform != "win32"
+    daemon_threads = True
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -266,7 +283,7 @@ class WebServer:
         """Bind loopback, preferring a stable port but never failing over one."""
         for port in (self.config.port, 0):
             try:
-                return ThreadingHTTPServer((self.config.host, port), BaseHTTPRequestHandler)
+                return _Server((self.config.host, port), BaseHTTPRequestHandler)
             except OSError:
                 logger.debug("Port %s unavailable; trying an ephemeral port.", port)
         raise OSError("No loopback port could be bound.")  # pragma: no cover
