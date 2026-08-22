@@ -11,6 +11,25 @@ from media_downloader.config import DownloadRequest
 from media_downloader.ffmpeg import FFmpegStatus
 
 
+@pytest.fixture(autouse=True)
+def _no_real_os_interaction(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail fast if a test would invoke real desktop UI.
+
+    media_downloader.web.system only shells out for two things: opening a
+    folder and showing the startup address. On macOS and Windows the latter is
+    a modal dialog that blocks until a human clicks it, so an unpatched call
+    does not fail on CI -- it hangs the job until it times out. Turning that
+    into an immediate, obvious failure locally is worth the four lines.
+
+    Tests that exercise those paths patch subprocess.run themselves; monkeypatch
+    applies their patch after this one, so theirs wins.
+    """
+    monkeypatch.setattr(
+        "media_downloader.web.system.subprocess.run",
+        lambda *args, **kwargs: pytest.fail(f"a test tried to launch a real process: {args!r}"),
+    )
+
+
 @pytest.fixture
 def ffmpeg_present(tmp_path: Path) -> FFmpegStatus:
     return FFmpegStatus(ffmpeg=tmp_path / "ffmpeg", ffprobe=tmp_path / "ffprobe")

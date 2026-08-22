@@ -26,6 +26,10 @@ logger = get_logger("web.system")
 #: instead of among every file the browser has ever fetched.
 APP_FOLDER_NAME = "Media Downloader"
 
+#: How long to leave the startup-address dialog up. Long enough for someone
+#: who just launched the app, short enough that it cannot hang forever.
+DIALOG_TIMEOUT_SECONDS = 300
+
 
 def default_download_dir() -> Path:
     """Choose the directory the web UI downloads into.
@@ -132,8 +136,10 @@ def report_startup_url(url: str) -> None:
                 f"display dialog {_applescript_string(message)} "
                 'with title "Media Downloader" buttons {"OK"} default button "OK"'
             )
-            # argv list, never a shell string.
-            subprocess.run(["osascript", "-e", script], check=False)
+            # argv list, never a shell string. Bounded: this runs on a
+            # background thread and a dialog nobody is there to dismiss must
+            # not pin a subprocess for the life of the process.
+            subprocess.run(["osascript", "-e", script], check=False, timeout=DIALOG_TIMEOUT_SECONDS)
             return
     except Exception:  # pragma: no cover - a dialog must never be fatal
         logger.debug("Could not display the startup address dialog.")

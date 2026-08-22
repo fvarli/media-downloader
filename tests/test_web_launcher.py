@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import time
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -116,8 +117,20 @@ def test_a_machine_without_a_browser_still_serves(
     )
     monkeypatch.setattr(launcher, "open_browser", lambda url: False)
     monkeypatch.setattr(launcher, "BROWSER_DELAY_SECONDS", 0.0)
+    # Without this the fallback runs for real, and on macOS and Windows that is
+    # a modal dialog that blocks until somebody clicks it -- which nobody will
+    # on a CI runner.
+    shown: list[str] = []
+    monkeypatch.setattr(launcher, "report_startup_url", shown.append)
+
     out, _ = console
     assert launcher.serve(out, download_dir=tmp_path, open_browser_on_start=True) == 0
+
+    for _ in range(100):
+        if shown:
+            break
+        time.sleep(0.01)
+    assert shown == ["http://127.0.0.1:9999"]
 
 
 def test_the_default_download_directory_is_used_when_none_is_given(
