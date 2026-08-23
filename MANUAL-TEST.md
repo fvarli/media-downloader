@@ -40,6 +40,10 @@ file is byte-for-byte the one it tested.
 > only engage on files carrying macOS's quarantine attribute or Windows' Mark-of-the-Web, and
 > **a browser download sets those while `gh run download` does not.** Fetching with the CLI makes
 > the first-launch prompts silently not appear, which looks like a pass and proves nothing.
+>
+> `gh run download` also unpacks the archive for you, so you never hold the file itself and
+> cannot check its SHA-256. Both were confirmed: the browser download is the archive
+> byte-for-byte, with the bundle executable stored at mode 755.
 
 Open the workflow run on GitHub → **Artifacts** → click the archive name.
 
