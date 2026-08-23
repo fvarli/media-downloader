@@ -1,0 +1,63 @@
+name: macOS FFmpeg (LGPL)
+
+# Research and validation only. This builds an LGPL FFmpeg for macOS arm64 from
+# pinned sources, proves what is in it, and uploads it for inspection.
+#
+# It publishes nothing and pins nothing. The archive it produces is deliberately
+# NOT added to the tool manifest: a pinned URL has to be durable, public and
+# unauthenticated, and a workflow artifact is none of those. Wiring it in is a
+# separate, later decision.
+#
+# Manual dispatch only. Nothing about this should happen because somebody pushed
+# a commit -- it is a long build whose output nobody consumes automatically.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: macOS arm64
+    runs-on: macos-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      # The build itself needs no Python. This is for the verification step,
+      # which puts the archive through the application's own install path.
+      - name: Install the project
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      # Everything the build needs comes from pinned sources it fetches and
+      # checksums itself. Nothing is taken from Homebrew, and the build is
+      # configured with --disable-autodetect precisely so nothing can be.
+      - name: Build FFmpeg from pinned sources
+        run: packaging/ffmpeg/build-macos.sh dist-ffmpeg
+
+      - name: Build metadata
+        run: cat dist-ffmpeg/ffmpeg-build-info.json
+
+      # The build script already gates on licensing, portability and function.
+      # This is the other half: the archive going through ToolManager exactly
+      # as a real install would -- checksum, safe extraction, executable
+      # validation, atomic promote -- then every audio format and a real yt-dlp
+      # merge, run against the copy that came out of the archive.
+      - name: Verify the archive through the managed-tool path
+        run: |
+          python packaging/ffmpeg/verify_archive.py \
+            "$(ls dist-ffmpeg/*.tar.xz)" --platform darwin --machine arm64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-macos-arm64-lgpl
+          path: dist-ffmpeg/
+          retention-days: 14
+          if-no-files-found: error
