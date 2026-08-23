@@ -249,6 +249,39 @@ def check_resources(artifact: Path) -> None:
     check("no FFmpeg or Deno bundled", not bundled, str(bundled))
 
 
+#: Things a support report must never carry. A report is a file a
+#: non-technical user emails to a stranger, so every one of these is a real
+#: leak -- and the developer noise is what made an earlier report useless.
+FORBIDDEN_IN_REPORT = (
+    "X-MD-Token",
+    "Authorization",
+    "Cookie",
+    "pytest",
+    "/runner/",
+    "runneradmin",
+    "site-packages",
+    "GITHUB_TOKEN",
+    "ACTIONS_RUNTIME_TOKEN",
+)
+
+
+def check_report_hygiene(report: str, token: str) -> None:
+    """Assert the report carries neither secrets nor developer noise.
+
+    This cannot prove the report from somebody's real desktop is clean -- only
+    that run can. What it does is make a regression loud, having already been
+    the way a real report turned out to be 120 lines of pytest debris.
+    """
+    lowered = report.lower()
+    for needle in FORBIDDEN_IN_REPORT:
+        check(f"report excludes {needle}", needle.lower() not in lowered, needle)
+    # A URL's query and fragment are where credentials and tokens live, so the
+    # report redacts them rather than trusting that none were present.
+    check("report leaks no URL query string", "?v=" not in report and "&token" not in lowered)
+    if token:
+        check("report excludes the session token verbatim", token not in report)
+
+
 def check_web(executable: Path) -> None:
     print("\nWeb UI")
     with tempfile.TemporaryDirectory() as tmp:
@@ -295,6 +328,7 @@ def check_web(executable: Path) -> None:
             report = json.loads(body)["report"] if status == 200 else ""
             check("report has content", "Media Downloader diagnostics" in report)
             check("report excludes the session token", bool(token) and token not in report)
+            check_report_hygiene(report, token)
 
             # -- error-ID correlation -----------------------------------
             # The only way to check this on a build with no stdout: plant a

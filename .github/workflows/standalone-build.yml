@@ -42,28 +42,34 @@ jobs:
           # difference that makes stdout unavailable to CI.
           - label: macOS arm64 (windowed)
             os: macos-latest
-            artifact: Media-Downloader-macOS-arm64
             windowed: '1'
             mode: windowed
+            target: macos
             artifact_path: dist/Media Downloader.app
             exe: dist/Media Downloader.app/Contents/MacOS/media-downloader
+            archive: Media-Downloader-macOS-arm64-windowed.zip
+            extracted: package/extracted/Media Downloader.app
           - label: Windows x64 (windowed)
             os: windows-latest
-            artifact: Media-Downloader-Windows-x64
             windowed: '1'
             mode: windowed
+            target: windows
             artifact_path: dist/media-downloader
             exe: dist/media-downloader/media-downloader.exe
+            archive: Media-Downloader-Windows-x64-windowed.zip
+            extracted: package/extracted/media-downloader
           # Linux has no windowed/console distinction to make, and a console
           # build keeps one artifact where printed output is still checked.
           - label: Linux x86_64 (console)
             # Oldest available runner, for the lowest practical glibc floor.
             os: ubuntu-22.04
-            artifact: Media-Downloader-Linux-x86_64
             windowed: '0'
             mode: console
+            target: linux
             artifact_path: dist/media-downloader
             exe: dist/media-downloader/media-downloader
+            archive: Media-Downloader-Linux-x86_64.tar.gz
+            extracted: package/extracted/media-downloader
 
     steps:
       - uses: actions/checkout@v7
@@ -96,11 +102,73 @@ jobs:
         # as unsupported rather than pretending.
         run: python packaging/tool_check.py ffmpeg
 
+      # -- the archive a human will actually download --------------------
+      #
+      # Built here, on the native runner, rather than left to the artifact
+      # upload. GitHub documents that its upload does not preserve file
+      # permissions -- everything arrives as 644 -- which would leave the
+      # macOS .app unable to launch at all. Packing it ourselves keeps the
+      # executable bit, and keeps build leftovers out: a windowed macOS build
+      # leaves both the .app and PyInstaller's COLLECT directory in dist/, and
+      # uploading dist/ wholesale sent both.
+      - name: Pack the distributable archive (macOS)
+        if: matrix.target == 'macos'
+        run: |
+          mkdir -p package
+          # ditto is Apple's own tool and the one Archive Utility is built on,
+          # so what it stores is what the tester's Finder will restore.
+          ditto -c -k --sequesterRsrc --keepParent \
+            "${{ matrix.artifact_path }}" "package/${{ matrix.archive }}"
+
+      - name: Pack the distributable archive (Windows)
+        if: matrix.target == 'windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path package | Out-Null
+          # ZipFile.CreateFromDirectory rather than Compress-Archive: its
+          # includeBaseDirectory argument says explicitly that the payload
+          # folder is the archive root, instead of depending on how
+          # Compress-Archive interprets a directory path.
+          $source = (Resolve-Path "${{ matrix.artifact_path }}").Path
+          $target = Join-Path (Resolve-Path package).Path "${{ matrix.archive }}"
+          Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+          [System.IO.Compression.ZipFile]::CreateFromDirectory(
+            $source, $target, [System.IO.Compression.CompressionLevel]::Optimal, $true)
+          Get-Item $target | Select-Object Name, Length
+
+      - name: Pack the distributable archive (Linux)
+        if: matrix.target == 'linux'
+        run: |
+          mkdir -p package
+          tar -czf "package/${{ matrix.archive }}" -C dist media-downloader
+
+      # Extracts with the platform's own tool and checks what an archive round
+      # trip is known to destroy: the executable bit, the bundle structure,
+      # and whether anything unwanted came along.
+      - name: Verify the archive extracts correctly
+        run: |
+          python packaging/verify_package.py "package/${{ matrix.archive }}" \
+            package/extracted --platform ${{ matrix.target }}
+
+      # The point of the whole exercise: the smoke test now runs against the
+      # extracted archive, which is exactly what the tester will double-click,
+      # rather than against the build directory it came from.
+      - name: Smoke-test the extracted archive
+        run: python packaging/smoke_test.py "${{ matrix.extracted }}" --mode ${{ matrix.mode }}
+
       - name: Artifact metadata and checksum
         shell: bash
         run: |
-          python packaging/artifact_info.py "${{ matrix.artifact_path }}" dist/artifact-info.json
-          cat dist/artifact-info.json
+          python packaging/artifact_info.py "${{ matrix.artifact_path }}" \
+            "package/artifact-info.json" "package/${{ matrix.archive }}" \
+            --commit "$GITHUB_SHA" --mode "${{ matrix.mode }}"
+          cd package
+          if command -v shasum >/dev/null; then
+            shasum -a 256 "${{ matrix.archive }}" > "${{ matrix.archive }}.sha256"
+          else
+            sha256sum "${{ matrix.archive }}" > "${{ matrix.archive }}.sha256"
+          fi
+          cat "${{ matrix.archive }}.sha256"
 
       # Clearly separated and non-blocking: a transient change at an external
       # service must never make a good artifact look broken. A failure here is
@@ -114,9 +182,60 @@ jobs:
           # network -- not what it printed.
           "${{ matrix.exe }}" "https://www.youtube.com/watch?v=jNQXAC9IVRw" --info
 
-      - uses: actions/upload-artifact@v4
+      # archive: false uploads the single file as-is, so what gets downloaded
+      # IS this archive -- no wrapper zip and no second extraction. In that
+      # mode the action deliberately ignores `name` and takes the artifact name
+      # from the filename, which is why every job produces a distinct one.
+      - name: Upload the manual-test archive
+        uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.artifact }}
-          path: dist/
+          name: ${{ matrix.archive }}
+          path: package/${{ matrix.archive }}
+          archive: false
           retention-days: 14
           if-no-files-found: error
+
+      - name: Upload checksum and metadata
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.archive }}-metadata
+          path: |
+            package/artifact-info.json
+            package/${{ matrix.archive }}.sha256
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Download the artifact back
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ matrix.archive }}
+          path: roundtrip
+          # Raw bytes, not an extraction: the comparison is the whole point.
+          skip-decompress: true
+
+      # Proves the file a human downloads is byte-for-byte the file this job
+      # tested. Without it, everything above is a claim about a local file.
+      - name: Verify the uploaded artifact round-trips unchanged
+        shell: bash
+        run: |
+          python - <<'EOF'
+          import hashlib, pathlib, sys
+
+          def digest(path):
+              h = hashlib.sha256()
+              with open(path, "rb") as handle:
+                  for block in iter(lambda: handle.read(1024 * 1024), b""):
+                      h.update(block)
+              return h.hexdigest()
+
+          local = pathlib.Path("package/${{ matrix.archive }}")
+          fetched = pathlib.Path("roundtrip/${{ matrix.archive }}")
+          if not fetched.is_file():
+              sys.exit(f"the artifact did not come back as a file: {fetched}")
+          before, after = digest(local), digest(fetched)
+          print(f"uploaded   {before}")
+          print(f"downloaded {after}")
+          if before != after:
+              sys.exit("the downloaded artifact is not the file this job tested")
+          print("round trip verified: byte-for-byte identical")
+          EOF

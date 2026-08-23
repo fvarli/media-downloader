@@ -29,6 +29,7 @@ def _load(path: Path, name: str) -> ModuleType:
 
 verify_archive = _load(PACKAGING / "ffmpeg" / "verify_archive.py", "_verify_archive")
 smoke_test = _load(PACKAGING / "smoke_test.py", "_smoke_test")
+verify_package = _load(PACKAGING / "verify_package.py", "_verify_package")
 
 
 # -- the licensing gate --------------------------------------------------
@@ -121,3 +122,82 @@ def test_every_platforms_app_data_rule_is_redirected() -> None:
     env = smoke_test.isolated(Path("/somewhere"))
     assert set(env) == {"XDG_DATA_HOME", "LOCALAPPDATA", "HOME", "USERPROFILE"}
     assert set(env.values()) == {str(Path("/somewhere"))}
+
+
+# -- the distributable archive -------------------------------------------
+#
+# GitHub's artifact upload documents that it does not preserve permissions:
+# everything arrives as 644. A macOS .app delivered that way cannot launch at
+# all, so we build the archive ourselves and these are the judgements that say
+# whether doing so worked.
+
+
+@pytest.mark.parametrize("platform", ["macos", "windows", "linux"])
+def test_an_archive_holding_exactly_the_payload_is_accepted(platform: str) -> None:
+    root = verify_package.EXPECTED_ROOT[platform]
+    assert verify_package.layout_problems(platform, [root]) == []
+
+
+def test_the_duplicate_collect_directory_beside_the_app_is_rejected() -> None:
+    """The specific thing that shipped before.
+
+    A windowed macOS build leaves both the .app and PyInstaller's COLLECT
+    directory in dist/, and uploading dist/ wholesale sent both: 429 files
+    where the bundle itself is 129.
+    """
+    problems = verify_package.layout_problems("macos", ["Media Downloader.app", "media-downloader"])
+    assert problems
+    assert any("media-downloader" in p for p in problems)
+
+
+@pytest.mark.parametrize("leftover", ["build", "artifact-info.json", "__pycache__"])
+def test_build_leftovers_are_named_not_merely_counted(leftover: str) -> None:
+    problems = verify_package.layout_problems("linux", ["media-downloader", leftover])
+    assert any(leftover in p for p in problems)
+
+
+def test_an_empty_archive_is_rejected() -> None:
+    assert verify_package.layout_problems("linux", [])
+
+
+@pytest.mark.parametrize("mode", [0o755, 0o700, 0o555, 0o111])
+def test_a_surviving_execute_bit_is_recognised(mode: int) -> None:
+    assert verify_package.is_executable(mode) is True
+
+
+@pytest.mark.parametrize("mode", [0o644, 0o666, 0o444, 0o600])
+def test_the_permissions_github_would_have_left_are_rejected(mode: int) -> None:
+    """0o644 is exactly what upload-artifact documents it produces."""
+    assert verify_package.is_executable(mode) is False
+
+
+def test_windows_is_deliberately_exempt_from_the_permission_check() -> None:
+    """Executability on Windows is not carried by a permission bit, so
+    demanding one there would be superstition rather than a check."""
+    assert verify_package.MUST_BE_EXECUTABLE["windows"] is None
+    assert verify_package.MUST_BE_EXECUTABLE["macos"] is not None
+    assert verify_package.MUST_BE_EXECUTABLE["linux"] is not None
+
+
+def test_every_platform_is_described_consistently() -> None:
+    platforms = set(verify_package.EXPECTED_ROOT)
+    assert platforms == set(verify_package.REQUIRED_PATHS) == set(verify_package.MUST_BE_EXECUTABLE)
+
+
+@pytest.mark.parametrize("platform", ["macos", "windows", "linux"])
+def test_the_executable_checked_is_one_of_the_required_paths(platform: str) -> None:
+    """Otherwise a rename could leave the permission check pointing at nothing
+    and passing by looking at an absent file."""
+    relative = verify_package.MUST_BE_EXECUTABLE[platform]
+    if relative is not None:
+        assert relative in verify_package.REQUIRED_PATHS[platform]
+
+
+# -- support-report hygiene ----------------------------------------------
+
+
+def test_the_report_denylist_covers_every_named_leak() -> None:
+    """The list is the check; a quiet removal from it removes a guarantee."""
+    forbidden = {item.lower() for item in smoke_test.FORBIDDEN_IN_REPORT}
+    for required in ("x-md-token", "authorization", "cookie", "pytest", "/runner/"):
+        assert required in forbidden
