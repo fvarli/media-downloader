@@ -177,12 +177,12 @@ class ToolManager:
         """
         spec = self.spec_for(tool)
         if system_path is not None:
-            return ToolStatus(
-                tool=tool,
-                state=ToolState.SYSTEM,
-                path=system_path,
-                version=spec.version if spec else None,
-            )
+            # No version: the manifest describes the copy we would install, not
+            # the one already on this machine, and they are frequently not even
+            # the same program -- a system Node satisfies the JavaScript runtime
+            # requirement that the manifest pins Deno for. Reporting the
+            # manifest's number here once produced "system 2.9.5" for Node 22.
+            return ToolStatus(tool=tool, state=ToolState.SYSTEM, path=system_path)
 
         managed = self.managed_dir(tool)
         if managed is not None and spec is not None:

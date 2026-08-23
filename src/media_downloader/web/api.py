@@ -208,7 +208,15 @@ def install_tool(ctx: ApiContext, tool: str) -> tuple[int, dict[str, Any]]:
 
 
 def _tool_summary(ctx: ApiContext, tool: str) -> str:
-    """One-line description of where a tool comes from, for the report."""
+    """One-line description of where a tool comes from, for the report.
+
+    The JavaScript runtime is asked for its own canonical description rather
+    than assembled from a tool status: a system Node is not the Deno the
+    manifest pins, and pairing one's name with the other's version produced a
+    support report claiming "system 2.9.5" for a machine running Node 22.
+    """
+    if tool == "deno":
+        return ctx.tools.js_runtime_summary()
     status = ctx.tools.status(tool)
     version = f" {status.version}" if status.version else ""
     return f"{status.state.value}{version}"

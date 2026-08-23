@@ -350,6 +350,24 @@ def test_a_system_tool_takes_precedence_over_a_managed_one(
     assert status.path == Path("/usr/bin/ffmpeg")
 
 
+def test_a_system_tool_is_never_given_the_manifests_version(
+    tmp_path: Path, linux_env: dict[str, str]
+) -> None:
+    """The manifest describes what we would install, not what is installed.
+
+    Reporting it for a system copy produced "system 2.9.5" on a machine whose
+    JavaScript runtime was Node 22: the manifest pins Deno, but a system Node
+    satisfies the same requirement. Two different programs, one version number.
+    """
+    spec, data = fake_spec(tmp_path, {"deno": b"DENO"})
+    mgr, _ = manager_for(data, linux_env, spec=spec)
+
+    status = mgr.status("deno", system_path=Path("/usr/bin/node"))
+    assert status.state is ToolState.SYSTEM
+    assert status.version is None
+    assert mgr.spec_for("deno").version is not None  # the manifest does know one
+
+
 def test_a_managed_tool_is_reported_when_no_system_copy_exists(
     tmp_path: Path, linux_env: dict[str, str]
 ) -> None:

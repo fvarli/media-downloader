@@ -14,7 +14,9 @@ project implements no JavaScript or challenge handling of its own.
 from __future__ import annotations
 
 import importlib.util
+import re
 import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -25,6 +27,9 @@ KNOWN_RUNTIMES: tuple[str, ...] = ("deno", "node", "bun")
 
 # Runtimes yt-dlp enables on its own, without a js_runtimes override.
 DEFAULT_ENABLED_RUNTIMES: frozenset[str] = frozenset({"deno"})
+
+#: Asking a runtime for its version should be instant; never hang on it.
+VERSION_TIMEOUT_SECONDS = 10
 
 JS_RUNTIME_GUIDANCE = (
     "No JavaScript runtime was found. yt-dlp needs one to solve YouTube's "
@@ -47,6 +52,29 @@ class JSRuntimeStatus:
     managed: bool = False
 
     @property
+    def source(self) -> str:
+        """Where this runtime came from: system, managed, or unavailable."""
+        if self.name is None:
+            return "unavailable"
+        return "managed" if self.managed else "system"
+
+    def describe(self, version: str | None = None) -> str:
+        """One canonical line for logs and the support report.
+
+        Both surfaces call this rather than assembling their own description.
+        They used to derive it separately, and disagreed: a report once said
+        "system 2.9.5" -- Deno's pinned manifest version -- while the runtime
+        actually in use was Node 22. Name, source and version now always
+        describe the same program.
+        """
+        if self.name is None:
+            return "unavailable"
+        parts = [self.source, self.name]
+        if version:
+            parts.append(version)
+        return " ".join(parts)
+
+    @property
     def available(self) -> bool:
         return self.name is not None
 
@@ -60,6 +88,36 @@ class JSRuntimeStatus:
         if self.name is None:
             return False
         return self.managed or self.name not in DEFAULT_ENABLED_RUNTIMES
+
+
+def runtime_version(status: JSRuntimeStatus) -> str | None:
+    """Ask the detected runtime what version it is.
+
+    Read from the binary rather than assumed from the manifest: the manifest
+    only knows about the copy we would install, which may not be the one in
+    use. Best effort -- a version is a nicety, and failing to get one must not
+    affect anything.
+    """
+    if status.path is None:
+        return None
+    try:
+        # argv list, no shell, and the path came from our own detection.
+        result = subprocess.run(
+            [status.path, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=VERSION_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    first = (result.stdout or result.stderr or "").strip().splitlines()
+    if not first:
+        return None
+    # "deno 2.9.5 (stable, ...)" -> 2.9.5 ; "v22.20.0" -> 22.20.0
+    match = re.search(r"\d+\.\d+(?:\.\d+)?", first[0])
+    return match.group(0) if match else None
 
 
 def detect_js_runtime() -> JSRuntimeStatus:

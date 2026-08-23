@@ -16,7 +16,7 @@ from typing import Any
 from media_downloader.diagnostics import record_error
 from media_downloader.errors import MediaDownloaderError
 from media_downloader.ffmpeg import FFmpegStatus, detect_ffmpeg
-from media_downloader.jsruntime import detect_js_runtime
+from media_downloader.jsruntime import detect_js_runtime, runtime_version
 from media_downloader.logging_setup import get_logger
 from media_downloader.tools.manager import (
     ToolInstallError,
@@ -81,6 +81,11 @@ class ToolInstaller:
         if runtime.available and not runtime.managed:
             return runtime.path
         return None
+
+    def js_runtime_summary(self) -> str:
+        """Canonical description of the JavaScript runtime actually in use."""
+        status = detect_js_runtime()
+        return status.describe(runtime_version(status))
 
     def status(self, tool: str) -> ToolStatus:
         with self._lock:
