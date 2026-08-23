@@ -118,7 +118,11 @@ def main() -> int:
     # -- web UI ----------------------------------------------------------
     print("\nWeb UI")
     with tempfile.TemporaryDirectory() as tmp:
-        env = {"XDG_DATA_HOME": tmp, "LOCALAPPDATA": tmp}
+        # Each platform derives its app-data directory differently: Linux from
+        # XDG_DATA_HOME, Windows from LOCALAPPDATA, macOS from HOME via
+        # ~/Library/Application Support. Overriding all three keeps the run
+        # isolated wherever it happens to execute.
+        env = {"XDG_DATA_HOME": tmp, "LOCALAPPDATA": tmp, "HOME": tmp, "USERPROFILE": tmp}
         server = subprocess.Popen(
             [str(executable), "--web"],
             stdout=subprocess.PIPE,

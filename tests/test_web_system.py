@@ -224,12 +224,14 @@ def test_startup_error_carries_the_id_and_log_location(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setattr(system, "current_platform", lambda: "linux")
-    system.show_startup_error("Port 8765 is in use.", "MD-20260823-A1B2C3", Path("/logs"))
+    log_dir = Path("/logs")
+    system.show_startup_error("Port 8765 is in use.", "MD-20260823-A1B2C3", log_dir)
 
     err = capsys.readouterr().err
     assert "could not start" in err
     assert "MD-20260823-A1B2C3" in err
-    assert "/logs" in err
+    # str(), not a literal: Path("/logs") renders as "\logs" on Windows.
+    assert str(log_dir) in err
 
 
 def test_startup_error_shows_no_traceback(
