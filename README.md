@@ -395,6 +395,32 @@ whitespace debris is tidied up. Text is never transliterated, so Turkish and oth
 stay readable. The media ID is always appended, which keeps names unique and traceable back to their
 source; if cleaning leaves no usable title, the uploader or service name is used instead.
 
+### If something goes wrong
+
+The application keeps a small diagnostic log and can produce a report you can send on:
+
+1. Open Media Downloader.
+2. Open **Help & diagnostics**.
+3. Click **Export support report**.
+4. Send the generated `.txt` file to whoever maintains this.
+
+The report is written to your downloads folder and **is never uploaded anywhere** -- there is no
+telemetry and nothing is sent automatically. It contains version and platform details, where things
+are installed, the most recent error and a short excerpt of the log. Session tokens, cookies,
+credentials and request headers are excluded, and URLs are stripped of their query strings before
+they reach it.
+
+If an unexpected error occurs, the interface shows a short code such as `MD-20260823-A1B2C3`. Quoting
+that code lets the matching log entry be found.
+
+Logs are bounded in size and live alongside the application's other data:
+
+| Platform | Log folder |
+| --- | --- |
+| Linux | `~/.local/share/media-downloader/logs/` (or `$XDG_DATA_HOME`) |
+| macOS | `~/Library/Application Support/Media Downloader/logs/` |
+| Windows | `%LOCALAPPDATA%\Media Downloader\logs\` |
+
 ### Optional tools
 
 FFmpeg and a JavaScript runtime both make downloads better, and neither can be installed with `pip`.
@@ -417,6 +443,23 @@ If one is missing, the web interface can fetch it for you -- and only then:
 | Windows | `%LOCALAPPDATA%\Media Downloader\tools\` |
 
 Deleting that folder undoes the installation completely.
+
+Which tools can be installed automatically depends on the platform, because each one needs a source
+we can pin and verify:
+
+| Platform | FFmpeg | JavaScript runtime (Deno) |
+| --- | --- | --- |
+| Linux x86_64 | Yes (LGPL build) | Yes |
+| Windows x64 | Yes (LGPL build) | Yes |
+| macOS arm64 | **No** -- see below | Yes |
+
+**macOS FFmpeg cannot currently be installed automatically.** Every macOS provider examined failed
+at least one requirement: the only one linked from ffmpeg.org publishes no SHA-256 checksum, and the
+alternative that does publish checksums serves them behind a URL that is replaced in place when it
+rebuilds, without publishing its build flags -- so neither a stable pin nor the licence can be
+established. Rather than ship a binary that cannot be verified, the application reports the tool as
+unavailable on macOS and offers no install. Installing FFmpeg through Homebrew or another package
+manager works normally, and a system copy is always preferred anyway.
 
 The CLI never downloads a tool. It uses one if it finds it, and otherwise behaves exactly as it
 always has.
@@ -508,24 +551,28 @@ All three are configured in `pyproject.toml` and currently pass cleanly.
 Without activating the environment, prefix each command with the interpreter path — for example
 `.venv/bin/python -m pytest` on Linux and macOS, or `.venv\Scripts\python.exe -m pytest` on Windows.
 
-### Building a standalone artifact (Linux, in development)
+### Building a standalone artifact (in development)
 
-Work has started on standalone builds that need no Python installed. **Nothing is released yet** --
-this is a development-only build, verified on Linux x86_64 and nowhere else.
+Work has started on standalone builds that need no Python installed. **Nothing is released yet.**
+There is no v0.3.0, and the artifacts produced by CI are validation builds for development, **not
+official downloads**.
 
 ```bash
 python -m pip install -e ".[dev,packaging]"
 python -m PyInstaller packaging/media-downloader.spec --noconfirm
+./dist/media-downloader/media-downloader --web
 ```
 
 The result is a self-contained directory in `dist/media-downloader/` holding the executable and its
-`_internal/` support files. Run `dist/media-downloader/media-downloader --web` to start it; it needs
-neither the virtual environment nor a system Python.
+`_internal/` support files. It needs neither the virtual environment nor a system Python.
+
+Builds are produced with **Python 3.12**; the source test matrix continues to cover 3.10-3.13.
+Set `MD_WINDOWED_BUILD=1` to produce a windowed build with no console -- the intended shape for the
+eventual macOS and Windows releases. Validation builds keep the console so CI can read their output.
 
 FFmpeg and Deno are deliberately **not** bundled -- see [Optional tools](#optional-tools).
 
-Not yet done, and not promised: macOS and Windows builds, code signing, notarization, installers,
-and published binaries.
+Not yet done, and not promised: code signing, notarization, installers, and published binaries.
 
 ### Continuous integration
 
@@ -545,12 +592,15 @@ media-downloader/
 ├── README.md
 ├── .gitignore
 ├── .gitattributes                # LF line endings across all platforms
-├── .github/workflows/ci.yml      # Cross-platform test matrix
+├── .github/workflows/            # Source CI matrix + standalone build validation
+├── packaging/                    # PyInstaller spec, artifact metadata, smoke tests
 ├── src/
 │   └── media_downloader/
 │       ├── __init__.py           # Version
 │       ├── __main__.py           # python -m media_downloader
 │       ├── cli.py                # Argument parsing, orchestration, exit codes
+│       ├── diagnostics.py        # Bounded logging, error IDs, support report
+│       ├── paths.py              # Per-user app data, tools and log directories
 │       ├── config.py             # DownloadRequest; CLI > env > default precedence
 │       ├── downloader.py         # yt-dlp wrapper (injectable factory)
 │       ├── errors.py             # Exception hierarchy and ExitCode enum
@@ -561,6 +611,11 @@ media-downloader/
 │       ├── options.py            # Pure: request + tool status -> yt-dlp options
 │       ├── progress.py           # Progress rendering
 │       ├── service.py            # Shared application layer (CLI + web)
+│       ├── tools/                # Optional managed tools (FFmpeg, Deno)
+│       │   ├── manifest.py       # Pinned, checksum-verified sources
+│       │   ├── verify.py         # Streamed SHA-256, fail-closed
+│       │   ├── archive.py        # Traversal-proof extraction
+│       │   └── manager.py        # Install and discovery
 │       ├── urls.py               # URL validation and service detection
 │       └── web/                  # Local web interface
 │           ├── api.py            # Endpoint handlers
@@ -568,7 +623,8 @@ media-downloader/
 │           ├── launcher.py       # Start server, open browser
 │           ├── security.py       # Localhost request guards
 │           ├── server.py         # HTTP server and routing
-│           ├── system.py         # Download folder, file manager, browser
+│           ├── system.py         # Folders, browser, native dialogs
+│           ├── tools.py          # Consent-gated tool installation
 │           └── static/           # index.html, app.css, app.js
 └── tests/                        # Offline unit tests, one module per source module
 ```
@@ -637,8 +693,10 @@ These are accurate as of this version. They are limitations, not planned feature
 - **No batch input.** One URL per run; no file-of-URLs mode.
 - **The web interface runs one download at a time**, with no queue, cancel or retry.
 - **The web interface keeps no history between runs.** Its session list is in memory only.
-- **Standalone builds are development-only.** A Linux artifact can be built and has been
-  verified; macOS and Windows builds, signing and published binaries do not exist yet.
+- **Standalone builds are development-only.** They can be built and are exercised by CI, but no
+  standalone release exists; signing, notarization and installers remain future work.
+- **Managed FFmpeg is unavailable on macOS**, because no provider was found whose binaries can
+  be both version-pinned and licence-verified. Install it with Homebrew instead.
 - **No authentication.** No cookies, no browser-cookie extraction, no logins. Only publicly
   accessible media can be downloaded.
 - **No subtitle, thumbnail or metadata embedding.**

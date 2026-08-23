@@ -1,0 +1,99 @@
+name: Standalone build
+
+# Validation only. This workflow builds and exercises the frozen application on
+# each platform; it never publishes anything. There is no tag, no release and
+# deliberately no write permission -- artifacts are uploaded purely so a human
+# can download and inspect them.
+#
+# It runs on demand, and automatically only when something that can actually
+# affect the packaged application changes. The 12-job source CI remains the
+# always-on compatibility gate.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'packaging/**'
+      - 'src/media_downloader/**'
+      - 'pyproject.toml'
+      - '.github/workflows/standalone-build.yml'
+
+permissions:
+  contents: read
+
+env:
+  # One pinned interpreter for every artifact. The source CI keeps proving
+  # 3.10-3.13; the build interpreter is a packaging detail and does not
+  # redefine which Python versions the project supports.
+  PYTHON_VERSION: '3.12'
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS arm64
+            os: macos-latest
+            artifact: Media-Downloader-macOS-arm64
+          - label: Windows x64
+            os: windows-latest
+            artifact: Media-Downloader-Windows-x64
+          - label: Linux x86_64
+            # Oldest available runner, for the lowest practical glibc floor.
+            os: ubuntu-22.04
+            artifact: Media-Downloader-Linux-x86_64
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install project and packaging tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,packaging]"
+
+      - name: Build the frozen application
+        run: python -m PyInstaller packaging/media-downloader.spec --noconfirm
+
+      # Deterministic and offline. This is the check that must stay green: it
+      # exercises the built executable, not the source tree.
+      - name: Smoke-test the artifact
+        run: python packaging/smoke_test.py dist/media-downloader
+
+      - name: Managed Deno install and discovery
+        run: python packaging/tool_check.py deno
+
+      - name: Managed FFmpeg install and discovery
+        # No macOS entry exists: no provider was found that meets the
+        # licensing and provenance requirements, so the tool_check reports it
+        # as unsupported rather than pretending.
+        run: python packaging/tool_check.py ffmpeg
+
+      - name: Artifact metadata and checksum
+        shell: bash
+        run: |
+          python packaging/artifact_info.py dist/media-downloader dist/artifact-info.json
+          cat dist/artifact-info.json
+
+      # Clearly separated and non-blocking: a transient change at an external
+      # service must never make a good artifact look broken. A failure here is
+      # still visible in the run.
+      - name: Metadata-level network smoke (non-blocking)
+        continue-on-error: true
+        shell: bash
+        run: |
+          ./dist/media-downloader/media-downloader "https://www.youtube.com/watch?v=jNQXAC9IVRw" --info ||
+          ./dist/media-downloader/media-downloader.exe "https://www.youtube.com/watch?v=jNQXAC9IVRw" --info
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/
+          retention-days: 14
+          if-no-files-found: error
