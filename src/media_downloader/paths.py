@@ -42,7 +42,7 @@ def app_data_dir(env: Mapping[str, str] | None = None) -> Path:
     """
     environ = os.environ if env is None else env
     platform = current_platform()
-    home = _home()
+    home = _home(env)
 
     if platform == "darwin":
         return home / "Library" / "Application Support" / APP_DISPLAY_NAME
@@ -101,8 +101,25 @@ def ensure_dir(path: Path) -> Path:
     return path
 
 
-def _home() -> Path:
-    """The user's home directory, or the working directory if there is none."""
+def _home(env: Mapping[str, str] | None = None) -> Path:
+    """The user's home directory, or the working directory if there is none.
+
+    An injected environment is honoured here, not just by the callers that read
+    XDG_DATA_HOME and LOCALAPPDATA directly. ``Path.home()`` reads the *process*
+    environment, so a caller that passed HOME in a mapping got the real user's
+    home anyway -- isolation that looks right and is not. That is how a CI check
+    installed a managed tool into the runner's own Application Support
+    directory: macOS derives its path from the home directory alone, and the
+    injected HOME was never consulted.
+
+    With no injected environment the behaviour is unchanged: ``Path.home()``
+    already reads HOME on POSIX and the profile on Windows.
+    """
+    if env is not None:
+        for key in ("HOME", "USERPROFILE"):
+            value = env.get(key, "").strip()
+            if value and Path(value).is_absolute():
+                return Path(value)
     try:
         return Path.home()
     except (RuntimeError, OSError):  # pragma: no cover - home is normally resolvable

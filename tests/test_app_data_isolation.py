@@ -153,3 +153,61 @@ def test_running_the_server_does_not_touch_a_real_log(
     assert _isolated_app_data in log.parents
     for real in REAL_APP_DATA:
         assert real not in log.parents
+
+
+# -- an injected environment must actually be honoured -------------------
+#
+# A CI check installed a managed tool into the runner's own Application
+# Support directory despite passing HOME in an injected environment. The
+# environment was injected; it just was not consulted. Path.home() reads the
+# process environment, and macOS derives its whole app-data path from the home
+# directory, so the injection had no effect at all on that platform.
+
+
+@pytest.mark.parametrize("platform", ["darwin", "win32", "linux"])
+def test_an_injected_home_is_honoured_on_every_platform(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, platform: str
+) -> None:
+    monkeypatch.setattr(paths, "current_platform", lambda: platform)
+    injected = tmp_path / "injected-home"
+    # Only HOME/USERPROFILE: no XDG_DATA_HOME or LOCALAPPDATA to fall back on,
+    # so the home directory is the only thing that can be consulted.
+    env = {"HOME": str(injected), "USERPROFILE": str(injected)}
+
+    resolved = paths.app_data_dir(env)
+
+    assert injected in resolved.parents
+    assert _REAL_HOME not in resolved.parents
+
+
+@pytest.mark.parametrize("platform", ["darwin", "win32", "linux"])
+def test_the_tools_directory_follows_the_injected_home(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, platform: str
+) -> None:
+    """The specific failure: a managed tool installed outside the isolation."""
+    monkeypatch.setattr(paths, "current_platform", lambda: platform)
+    injected = tmp_path / "injected-home"
+    env = {"HOME": str(injected), "USERPROFILE": str(injected)}
+
+    installed = paths.tool_install_dir("deno", "2.9.5", env)
+
+    assert injected in installed.parents
+    assert _REAL_HOME not in installed.parents
+
+
+def test_a_relative_home_is_ignored_rather_than_trusted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A relative path would resolve against the working directory."""
+    monkeypatch.setattr(paths, "current_platform", lambda: "darwin")
+    assert paths.app_data_dir({"HOME": "relative/home"}).is_absolute()
+
+
+def test_no_injected_environment_still_uses_the_real_home(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The change must not alter what the application does for real users."""
+    monkeypatch.setattr(paths, "current_platform", lambda: "darwin")
+    assert paths.app_data_dir() == Path.home() / "Library" / "Application Support" / (
+        paths.APP_DISPLAY_NAME
+    )
