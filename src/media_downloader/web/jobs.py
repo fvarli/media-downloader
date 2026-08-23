@@ -141,6 +141,19 @@ def register_error_code(exc_type: type[MediaDownloaderError], code: str) -> None
     _ERROR_CODES[exc_type] = code
 
 
+def _log_state(job: Job, state: JobState, **fields: object) -> None:
+    """Record one lifecycle transition.
+
+    Deliberately narrow. Support needs to answer "did it finish, and which
+    file?", which takes a job id, the service, a media id and the final
+    filename -- not the URL. The source URL is never logged to obtain them,
+    and neither are cookies, tokens, credentials, headers, query strings,
+    fragments or arbitrary extractor metadata.
+    """
+    extra = " ".join(f"{k}={v}" for k, v in fields.items() if v is not None)
+    logger.info("job %s state=%s%s", job.id, state.value, f" {extra}" if extra else "")
+
+
 def _error_code(exc: MediaDownloaderError) -> str:
     """Map an exception to its wire code, most specific class first."""
     for klass in type(exc).__mro__:
@@ -292,16 +305,31 @@ class JobManager:
             logger.debug("Job %s failed: %s", job.id, exc)
             self._fail(job, JobError.from_exception(exc))
         finally:
+            # Backstop only. Both terminal paths release the slot themselves,
+            # atomically with the state change -- see _release_locked.
             with self._lock:
-                if self._active_id == job.id:
-                    self._active_id = None
+                self._release_locked(job)
 
     # -- state transitions (all serialised on the lock) -------------------
 
+    def _release_locked(self, job: Job) -> None:
+        """Give up the one-at-a-time slot. Caller must hold the lock.
+
+        Called while setting a terminal state so that "finished" and "not busy"
+        become visible in the same instant. Releasing afterwards left a window
+        where a job already reported COMPLETED but a fresh submit still raised
+        DownloadInProgressError -- exactly what a user hitting Download again
+        the moment the UI says done would see.
+        """
+        if self._active_id == job.id:
+            self._active_id = None
+
     def _set_state(self, job: Job, state: JobState) -> None:
         with self._lock:
+            changed = job.state is not state
             job.state = state
-        logger.info("job %s state=%s", job.id, state.value)
+        if changed:
+            _log_state(job, state)
 
     def _complete(self, job: Job, result: DownloadResult) -> None:
         with self._lock:
@@ -314,12 +342,23 @@ class JobManager:
             if job.progress.total_bytes:
                 job.progress = replace(job.progress, downloaded_bytes=job.progress.total_bytes)
             job.progress = replace(job.progress, filename=result.path.name)
+            self._release_locked(job)
+        _log_state(
+            job,
+            JobState.COMPLETED,
+            service=result.info.extractor,
+            media_id=result.info.media_id,
+            filename=result.path.name,
+        )
 
     def _fail(self, job: Job, error: JobError) -> None:
         with self._lock:
             job.state = JobState.FAILED
             job.error = error
             job.finished_at = time.time()
+            self._release_locked(job)
+        # Correlates with the error ID the interface shows the user.
+        _log_state(job, JobState.FAILED, code=error.code, error_id=error.error_id)
 
     # -- yt-dlp hooks ----------------------------------------------------
 
@@ -339,6 +378,7 @@ class JobManager:
                 with self._lock:
                     if job.state.is_terminal:
                         return
+                    entering = job.state is not JobState.DOWNLOADING
                     job.state = JobState.DOWNLOADING
                     if job.title is None and info.get("title"):
                         job.title = str(info["title"])
@@ -353,6 +393,8 @@ class JobManager:
                         fragment_index=status.get("fragment_index"),
                         fragment_count=status.get("fragment_count"),
                     )
+                if entering:
+                    _log_state(job, JobState.DOWNLOADING)
             except Exception:  # pragma: no cover - reporting must not break a download
                 logger.debug("Progress hook failed for job %s", job.id)
 
@@ -374,11 +416,15 @@ class JobManager:
                     return
                 if str(status.get("postprocessor") or "") in IGNORED_POSTPROCESSORS:
                     return
+                entering = False
                 with self._lock:
                     # Only a postprocessor that runs after the download is a
                     # phase worth showing.
                     if job.state is JobState.DOWNLOADING:
                         job.state = JobState.PROCESSING
+                        entering = True
+                if entering:
+                    _log_state(job, JobState.PROCESSING)
             except Exception:  # pragma: no cover
                 logger.debug("Postprocessor hook failed for job %s", job.id)
 

@@ -18,6 +18,7 @@ from media_downloader.service import Environment
 
 SAMPLE_MEDIA_INFO = MediaInfo(
     title="Example Video",
+    media_id="abc123",
     uploader="Example Channel",
     duration_seconds=213,
     extractor="Youtube",

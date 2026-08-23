@@ -5,8 +5,10 @@ Every downloader here is a fake, so nothing touches the network.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +27,7 @@ from media_downloader.web.jobs import (
 
 SAMPLE_INFO = MediaInfo(
     title="Example Video",
+    media_id="abc123",
     uploader="Example",
     duration_seconds=12,
     extractor="Twitter",
@@ -391,3 +394,220 @@ def test_an_expected_failure_gets_no_error_id(request_for: Any) -> None:
     assert done.error is not None
     assert done.error.error_id is None
     assert done.error.message == "private video"
+
+
+class _BusyAtTransition(logging.Handler):
+    """Samples is_busy at the moment a transition becomes observable.
+
+    Polling for the terminal state cannot test this: the poll interval is far
+    wider than the race, so it passes by luck even when the slot leaks. The
+    lifecycle record is emitted immediately after the state is set, so reading
+    is_busy from inside the handler pins the observation to that instant.
+    """
+
+    def __init__(self, manager: JobManager) -> None:
+        super().__init__()
+        self.manager = manager
+        self.samples: dict[str, bool] = {}
+
+    def emit(self, record: logging.LogRecord) -> None:
+        message = record.getMessage()
+        for state in ("completed", "failed"):
+            if f"state={state}" in message:
+                self.samples[state] = self.manager.is_busy
+
+
+@pytest.mark.parametrize(
+    ("state", "kwargs"),
+    [
+        ("completed", {"result_path": Path("v.mp4")}),
+        ("failed", {"error": RuntimeError("nope")}),
+    ],
+)
+def test_a_terminal_job_no_longer_holds_the_slot(
+    request_for: Any, tmp_path: Path, state: str, kwargs: Any
+) -> None:
+    """Finishing and releasing the slot must be observable together.
+
+    The slot used to be released after the worker's try block, so a job could
+    report a terminal state while a fresh submit still raised
+    DownloadInProgressError -- what a user pressing Download again the moment
+    the interface said done would hit.
+    """
+    if "result_path" in kwargs:
+        kwargs["result_path"] = tmp_path / "v.mp4"
+    manager, _ = manager_for(**kwargs)
+    handler = _BusyAtTransition(manager)
+    logger = logging.getLogger("media_downloader.web.jobs")
+    previous_level = logger.level
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)  # the record must reach the handler at all
+    try:
+        job = manager.submit(request_for("https://x.com/a/status/1"))
+        wait_until_done(manager, job.id)
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)
+
+    assert handler.samples[state] is False
+    assert manager.is_busy is False
+
+
+# -- lifecycle records (Defect 3) ----------------------------------------
+#
+# Only PREPARING used to be logged; DOWNLOADING, PROCESSING, COMPLETED and
+# FAILED assigned job.state directly. A report exported after a finished
+# download still ended at "preparing".
+
+
+@contextmanager
+def captured_lifecycle() -> Any:
+    records: list[str] = []
+
+    class Collect(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            message = record.getMessage()
+            if message.startswith("job "):
+                records.append(message)
+
+    handler = Collect()
+    logger = logging.getLogger("media_downloader.web.jobs")
+    previous_level = logger.level
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    try:
+        yield records
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)
+
+
+def _states(records: list[str]) -> list[str]:
+    return [
+        part.removeprefix("state=")
+        for r in records
+        for part in r.split()
+        if part.startswith("state=")
+    ]
+
+
+def test_a_successful_job_records_every_stage(request_for: Any, tmp_path: Path) -> None:
+    manager, _ = manager_for(
+        result_path=tmp_path / "v.mp4",
+        events=[
+            {"status": "downloading", "downloaded_bytes": 1, "total_bytes": 2, "info_dict": {}}
+        ],
+        pp_events=[{"status": "started", "postprocessor": "Merger"}],
+    )
+    with captured_lifecycle() as records:
+        job = manager.submit(request_for("https://x.com/a/status/1"))
+        wait_until_done(manager, job.id)
+
+    assert _states(records) == ["preparing", "downloading", "processing", "completed"]
+
+
+def test_processing_is_recorded_only_when_that_stage_runs(request_for: Any, tmp_path: Path) -> None:
+    """A plain download has no post-processing; inventing the stage would lie."""
+    manager, _ = manager_for(
+        result_path=tmp_path / "v.mp4",
+        events=[
+            {"status": "downloading", "downloaded_bytes": 1, "total_bytes": 2, "info_dict": {}}
+        ],
+    )
+    with captured_lifecycle() as records:
+        job = manager.submit(request_for("https://x.com/a/status/1"))
+        wait_until_done(manager, job.id)
+
+    assert "processing" not in _states(records)
+
+
+def test_a_stage_is_recorded_once_however_many_progress_events_arrive(
+    request_for: Any, tmp_path: Path
+) -> None:
+    manager, _ = manager_for(
+        result_path=tmp_path / "v.mp4",
+        events=[
+            {"status": "downloading", "downloaded_bytes": n, "total_bytes": 100, "info_dict": {}}
+            for n in range(1, 40)
+        ],
+    )
+    with captured_lifecycle() as records:
+        job = manager.submit(request_for("https://x.com/a/status/1"))
+        wait_until_done(manager, job.id)
+
+    assert _states(records).count("downloading") == 1
+
+
+def test_the_completion_record_carries_safe_support_identifiers(
+    request_for: Any, tmp_path: Path
+) -> None:
+    manager, _ = manager_for(result_path=tmp_path / "v.mp4")
+    with captured_lifecycle() as records:
+        job = manager.submit(request_for("https://x.com/a/status/1"))
+        wait_until_done(manager, job.id)
+
+    completed = next(r for r in records if "state=completed" in r)
+    assert job.id in completed
+    assert f"service={SAMPLE_INFO.extractor}" in completed
+    assert f"media_id={SAMPLE_INFO.media_id}" in completed
+    assert "filename=v.mp4" in completed
+
+
+def test_the_media_id_comes_from_metadata_not_from_the_url(
+    request_for: Any, tmp_path: Path
+) -> None:
+    """Parsing the URL for an identifier both leaks it and gets it wrong.
+
+    A YouTube watch URL's last path segment is "watch"; the real identifier
+    lives in the query string, which is exactly the part that must never be
+    logged. The extractor already reports it as metadata.
+    """
+    assert SAMPLE_INFO.media_id
+    assert SAMPLE_INFO.media_id not in ("watch", "")
+
+
+def test_no_lifecycle_record_contains_the_source_url(request_for: Any, tmp_path: Path) -> None:
+    url = "https://x.com/a/status/1?token=SUPERSECRET#frag"
+    manager, _ = manager_for(
+        result_path=tmp_path / "v.mp4",
+        events=[
+            {"status": "downloading", "downloaded_bytes": 1, "total_bytes": 2, "info_dict": {}}
+        ],
+        pp_events=[{"status": "started", "postprocessor": "Merger"}],
+    )
+    with captured_lifecycle() as records:
+        job = manager.submit(request_for(url))
+        wait_until_done(manager, job.id)
+
+    joined = "\n".join(records)
+    assert "SUPERSECRET" not in joined
+    assert "token=" not in joined
+    assert url not in joined
+    assert "x.com" not in joined
+
+
+def test_an_expected_failure_records_its_code(request_for: Any, tmp_path: Path) -> None:
+    """No error ID here by design -- those exist only for internal failures."""
+    manager, _ = manager_for(error=MediaUnavailableError("private video"))
+    with captured_lifecycle() as records:
+        job = manager.submit(request_for("https://x.com/a/status/1"))
+        finished = wait_until_done(manager, job.id)
+
+    failed = next(r for r in records if "state=failed" in r)
+    assert f"code={finished.error.code}" in failed
+    assert "error_id" not in failed  # absent, not the string "None"
+
+
+def test_an_internal_failure_records_the_error_id_the_user_is_shown(
+    request_for: Any, tmp_path: Path
+) -> None:
+    """The record must correlate with the ID the interface puts on screen."""
+    manager, _ = manager_for(error=RuntimeError("internal explosion"))
+    with captured_lifecycle() as records:
+        job = manager.submit(request_for("https://x.com/a/status/1"))
+        finished = wait_until_done(manager, job.id)
+
+    failed = next(r for r in records if "state=failed" in r)
+    assert finished.error.error_id is not None
+    assert f"error_id={finished.error.error_id}" in failed
+    assert "internal explosion" not in failed  # the ID is the handle, not the text

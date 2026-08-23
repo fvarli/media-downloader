@@ -73,6 +73,9 @@ class MediaInfo:
     """The metadata subset shown by ``--info``."""
 
     title: str
+    #: The extractor's own identifier for this media. Comes from metadata, so
+    #: it can be logged without touching the source URL's query string.
+    media_id: str | None
     uploader: str | None
     duration_seconds: float | None
     extractor: str
@@ -86,6 +89,7 @@ class MediaInfo:
     def from_info_dict(cls, info: dict[str, Any]) -> MediaInfo:
         return cls(
             title=str(info.get("title") or "Unknown title"),
+            media_id=str(info["id"]) if info.get("id") else None,
             uploader=info.get("uploader") or info.get("channel") or info.get("uploader_id"),
             duration_seconds=info.get("duration"),
             extractor=str(info.get("extractor_key") or info.get("extractor") or "unknown"),

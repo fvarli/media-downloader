@@ -18,7 +18,12 @@ from media_downloader.web.jobs import JobManager, JobState
 from media_downloader.web.tools import ToolInstaller
 
 SAMPLE_INFO = MediaInfo(
-    title="Example", uploader="Someone", duration_seconds=5, extractor="Twitter", webpage_url=""
+    title="Example",
+    media_id="abc123",
+    uploader="Someone",
+    duration_seconds=5,
+    extractor="Twitter",
+    webpage_url="",
 )
 
 
