@@ -141,6 +141,13 @@ echo "  commit $ACTUAL_COMMIT verified"
 # Deliberately absent: --enable-gpl and --enable-nonfree. Nothing here needs
 # them, and their absence is what keeps the result LGPL. The gate below fails
 # the build if either ever appears.
+# libopus is found through pkg-config, so the staged prefix has to be on
+# PKG_CONFIG_PATH -- and set, not appended: the runner arrives with its own
+# value, and inheriting it would reintroduce exactly the Homebrew leakage that
+# --disable-autodetect exists to prevent. LAME needs no entry here; FFmpeg
+# checks for it by linking directly, which the extra cflags and ldflags cover.
+export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
+
 (
   cd "$WORK/ffmpeg"
   quietly ffmpeg-configure ./configure \
