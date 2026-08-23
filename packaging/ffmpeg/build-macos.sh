@@ -54,6 +54,29 @@ JOBS="$(sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 
 say() { printf '\n== %s\n' "$*"; }
 
+#: Long build steps are quiet because their output is thousands of lines of
+#: compiler noise. Quiet must not mean undiagnosable, though: the first attempt
+#: at this build failed at FFmpeg's configure and the log contained nothing at
+#: all about why, because configure prints its diagnosis to stdout.
+LOG_TAIL_LINES=60
+
+quietly() {
+  local label="$1"; shift
+  local log="$WORK/${label}.log"
+  if ! "$@" >"$log" 2>&1; then
+    echo "  FAILED: $label" >&2
+    echo "  last $LOG_TAIL_LINES line(s) of $log:" >&2
+    tail -n "$LOG_TAIL_LINES" "$log" | sed 's/^/    | /' >&2
+    # FFmpeg records the actual compile failure here rather than in configure's
+    # own output, and it is the only place that says what was really missing.
+    if [ -f "$PWD/ffbuild/config.log" ]; then
+      echo "  last $LOG_TAIL_LINES line(s) of ffbuild/config.log:" >&2
+      tail -n "$LOG_TAIL_LINES" "$PWD/ffbuild/config.log" | sed 's/^/    | /' >&2
+    fi
+    exit 1
+  fi
+}
+
 fetch() {
   local url="$1" want="$2" dest="$3"
   curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 -o "$dest" "$url"
@@ -75,10 +98,10 @@ fetch "$OPUS_URL" "$OPUS_SHA256" "$WORK/opus.tar.gz"
 tar -xzf "$WORK/opus.tar.gz" -C "$WORK"
 (
   cd "$WORK/opus-$OPUS_VERSION"
-  ./configure --prefix="$DEPS" --disable-shared --enable-static \
-    --disable-doc --disable-extra-programs --with-pic >/dev/null
-  make -j"$JOBS" >/dev/null
-  make install >/dev/null
+  quietly opus-configure ./configure --prefix="$DEPS" --disable-shared \
+    --enable-static --disable-doc --disable-extra-programs --with-pic
+  quietly opus-make make -j"$JOBS"
+  quietly opus-install make install
 )
 
 # -- LAME ---------------------------------------------------------------
@@ -91,10 +114,10 @@ fetch "$LAME_URL" "$LAME_SHA256" "$WORK/lame.tar.gz"
 tar -xzf "$WORK/lame.tar.gz" -C "$WORK"
 (
   cd "$WORK/lame-$LAME_VERSION"
-  ./configure --prefix="$DEPS" --disable-shared --enable-static \
-    --disable-frontend --disable-dependency-tracking --with-pic >/dev/null
-  make -j"$JOBS" >/dev/null
-  make install >/dev/null
+  quietly lame-configure ./configure --prefix="$DEPS" --disable-shared \
+    --enable-static --disable-frontend --disable-dependency-tracking --with-pic
+  quietly lame-make make -j"$JOBS"
+  quietly lame-install make install
 )
 
 # -- FFmpeg -------------------------------------------------------------
@@ -120,7 +143,7 @@ echo "  commit $ACTUAL_COMMIT verified"
 # the build if either ever appears.
 (
   cd "$WORK/ffmpeg"
-  ./configure \
+  quietly ffmpeg-configure ./configure \
     --prefix="$WORK/install" \
     --disable-autodetect \
     --extra-cflags="-I$DEPS/include" \
@@ -134,10 +157,9 @@ echo "  commit $ACTUAL_COMMIT verified"
     --enable-static \
     --disable-doc \
     --disable-debug \
-    --disable-ffplay \
-    >/dev/null
-  make -j"$JOBS" >/dev/null
-  make install >/dev/null
+    --disable-ffplay
+  quietly ffmpeg-make make -j"$JOBS"
+  quietly ffmpeg-install make install
 )
 
 FFMPEG_BIN="$WORK/install/bin/ffmpeg"
