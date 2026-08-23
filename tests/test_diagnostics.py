@@ -337,8 +337,12 @@ def test_the_selftest_is_not_reachable_over_http() -> None:
     from media_downloader.web import api
 
     static = Path(api.__file__).parent / "static"
-    surfaces = [Path(api.__file__).read_text()]
-    surfaces += [p.read_text() for p in static.iterdir() if p.is_file()]
+    # Explicit encoding: these files are UTF-8, and Windows would otherwise
+    # decode them as cp1252 and fail on the first non-ASCII byte.
+    surfaces = [Path(api.__file__).read_text(encoding="utf-8")]
+    surfaces += [
+        p.read_text(encoding="utf-8", errors="replace") for p in static.iterdir() if p.is_file()
+    ]
     for text in surfaces:
         assert "MD_DIAGNOSTIC_SELFTEST" not in text
         assert "selftest" not in text.lower()

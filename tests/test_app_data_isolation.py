@@ -177,7 +177,11 @@ def test_an_injected_home_is_honoured_on_every_platform(
     resolved = paths.app_data_dir(env)
 
     assert injected in resolved.parents
-    assert _REAL_HOME not in resolved.parents
+    # Not "outside the real home": on Windows a temporary directory lives
+    # inside the user profile, so that would be false for a correct result.
+    for real in REAL_APP_DATA:
+        assert real != resolved
+        assert real not in resolved.parents
 
 
 @pytest.mark.parametrize("platform", ["darwin", "win32", "linux"])
@@ -192,7 +196,8 @@ def test_the_tools_directory_follows_the_injected_home(
     installed = paths.tool_install_dir("deno", "2.9.5", env)
 
     assert injected in installed.parents
-    assert _REAL_HOME not in installed.parents
+    for real in REAL_APP_DATA:
+        assert real not in installed.parents
 
 
 def test_a_relative_home_is_ignored_rather_than_trusted(
