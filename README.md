@@ -32,23 +32,34 @@ codes, safe filename and path handling, and behaviour that is identical on Linux
 
 | OS | Automated tests (CI) | End-to-end download |
 | --- | --- | --- |
-| Linux | Python 3.10-3.13 | Manually verified |
-| macOS | Python 3.10-3.13 | Not yet exercised |
-| Windows | Python 3.10-3.13 | Not yet exercised |
+| Linux | Python 3.10-3.13 | Manually verified, source and frozen artifact |
+| macOS | Python 3.10-3.13 | Not yet exercised by a human |
+| Windows | Python 3.10-3.13 | Not yet exercised by a human |
 
 The application uses only Python APIs and `pathlib` for path handling. It never shells out, never
 assumes Bash or GNU utilities, and never hardcodes an OS-specific path.
 
-> **Note on testing.** Two different things are verified, and they are not the same claim:
+> **Note on testing.** Three different kinds of evidence exist here, and none of them stands in for
+> another:
 >
-> - **Automated tests run on all three platforms.** The full suite, plus Ruff and strict mypy, runs
->   on Ubuntu, Windows and macOS against Python 3.10-3.13 via GitHub Actions on every push and pull
+> - **Automated tests on all three platforms.** The full suite, plus Ruff and strict mypy, runs on
+>   Ubuntu, Windows and macOS against Python 3.10-3.13 via GitHub Actions on every push and pull
 >   request. The code contains no platform-specific branches, and the suite covers Windows path and
 >   filename rules explicitly.
-> - **Real end-to-end downloads have only been performed on Linux** (Python 3.12.3). CI installs no
->   FFmpeg and contacts no media service, so actual downloading, stream merging and audio conversion
->   remain manually verified on Linux only. The local web interface has additionally been verified by
->   the project owner in a real browser, including an Instagram download.
+> - **Automated checks against the built artifact.** A separate workflow freezes the application on
+>   each platform and exercises the packaged executable -- startup, loopback binding, the served
+>   pages, the JSON API, the log written to the correct per-user directory, and a clean shutdown.
+>   These checks are structural and offline. **CI success is not desktop verification:** no runner
+>   double-clicks anything, sees a Gatekeeper prompt, or watches a video play.
+> - **Manual verification by the project owner, on Linux only** (Python 3.12.3, x86_64). The frozen
+>   Linux artifact has been run end to end: it starts, opens a browser, serves the interface,
+>   downloads a real YouTube video that then plays, saves into the downloads directory, and exports
+>   a support report. The web interface has also been used in a real browser for an Instagram
+>   download.
+>
+> **macOS and Windows have no manual verification at all.** They are covered by the first two kinds
+> of evidence and nothing more. Real downloading, stream merging and audio conversion have been
+> confirmed by a human only on Linux.
 
 ## Supported media services
 
@@ -567,12 +578,37 @@ The result is a self-contained directory in `dist/media-downloader/` holding the
 `_internal/` support files. It needs neither the virtual environment nor a system Python.
 
 Builds are produced with **Python 3.12**; the source test matrix continues to cover 3.10-3.13.
-Set `MD_WINDOWED_BUILD=1` to produce a windowed build with no console -- the intended shape for the
-eventual macOS and Windows releases. Validation builds keep the console so CI can read their output.
+
+Console or windowed is an explicit build-time choice. `MD_WINDOWED_BUILD=1` produces the shape a
+user would actually double-click -- no terminal behind the window, and on macOS a `.app` bundle --
+which is what the macOS and Windows validation jobs now build. Linux stays a console build, where
+there is no such distinction to make and printed output is still worth checking.
+
+```bash
+MD_WINDOWED_BUILD=1 python -m PyInstaller packaging/media-downloader.spec --noconfirm
+```
+
+Because a windowed build has no console, the artifact smoke test takes every observation from the
+file log and the HTTP API instead of standard output. Each server it starts gets its own app-data
+directory and reads its address out of that directory's own log, so it cannot accidentally test a
+leftover instance.
 
 FFmpeg and Deno are deliberately **not** bundled -- see [Optional tools](#optional-tools).
 
 Not yet done, and not promised: code signing, notarization, installers, and published binaries.
+
+### macOS FFmpeg (research, not shipped)
+
+macOS is the only platform with no managed FFmpeg, because no published provider meets the
+licensing and provenance requirements at once. `packaging/ffmpeg/build-macos.sh` and the
+manually-dispatched `macos-ffmpeg` workflow build one from pinned sources instead: FFmpeg pinned by
+commit, libopus and LAME by SHA-256. The build refuses to package a binary whose own `-buildconf`
+shows `--enable-gpl` or `--enable-nonfree`, or one that links anything outside the system
+libraries, and it encodes every offered audio format before packaging anything.
+
+**This is not shipped and not pinned.** The archive is uploaded for inspection only. A manifest URL
+has to be durable, public and unauthenticated, and a workflow artifact is none of those, so the
+application continues to report macOS FFmpeg as unsupported and to offer no install for it.
 
 ### Continuous integration
 
@@ -592,8 +628,9 @@ media-downloader/
 ├── README.md
 ├── .gitignore
 ├── .gitattributes                # LF line endings across all platforms
-├── .github/workflows/            # Source CI matrix + standalone build validation
+├── .github/workflows/            # Source CI matrix, standalone builds, macOS FFmpeg
 ├── packaging/                    # PyInstaller spec, artifact metadata, smoke tests
+│   └── ffmpeg/                   # macOS LGPL FFmpeg build and archive verification
 ├── src/
 │   └── media_downloader/
 │       ├── __init__.py           # Version
@@ -696,7 +733,10 @@ These are accurate as of this version. They are limitations, not planned feature
 - **Standalone builds are development-only.** They can be built and are exercised by CI, but no
   standalone release exists; signing, notarization and installers remain future work.
 - **Managed FFmpeg is unavailable on macOS**, because no provider was found whose binaries can
-  be both version-pinned and licence-verified. Install it with Homebrew instead.
+  be both version-pinned and licence-verified. An LGPL build from pinned sources exists in
+  `packaging/ffmpeg/`, but it is research: it has no durable public URL, so it is not in the
+  manifest and the application still reports macOS FFmpeg as unsupported. Install it with Homebrew
+  instead.
 - **No authentication.** No cookies, no browser-cookie extraction, no logins. Only publicly
   accessible media can be downloaded.
 - **No subtitle, thumbnail or metadata embedding.**
@@ -709,6 +749,9 @@ These are accurate as of this version. They are limitations, not planned feature
 - **Real downloads verified on Linux only.** The automated suite passes on Windows and macOS in CI,
   but CI runs no FFmpeg and downloads no media, so end-to-end downloading has not been exercised on
   Windows or macOS hardware. See [Supported platforms](#supported-platforms).
+- **The windowed macOS and Windows builds have never been opened by a human.** CI builds and
+  exercises them, but nobody has double-clicked one, dismissed a Gatekeeper or SmartScreen prompt,
+  or confirmed that no console window appears.
 
 ## Possible future improvements
 
