@@ -168,16 +168,35 @@ def configure_file_logging(
 
         logger = logging.getLogger(LOGGER_NAME)
         logger.setLevel(min(logger.level or level, level))
-        # Replace an existing file handler rather than stacking duplicates.
-        for existing in list(logger.handlers):
-            if isinstance(existing, logging.handlers.RotatingFileHandler):
-                logger.removeHandler(existing)
+        # Replace an existing file handler rather than stacking duplicates,
+        # closing it so the previous file is genuinely released.
+        remove_file_logging()
         logger.addHandler(handler)
 
         STATE.log_file = path
         return path
     except Exception:  # diagnostics must never stop the application
         return None
+
+
+def remove_file_logging() -> None:
+    """Detach and close any rotating file handler on the application logger.
+
+    Exists because a handler outlives the call that created it. Pointing the
+    path somewhere else afterwards changes nothing -- the open file object is
+    already bound. Tests use this to guarantee they can never append to a real
+    user's log, and it makes handler lifetime something callers can control
+    rather than a module-level side effect.
+    """
+    from media_downloader.logging_setup import LOGGER_NAME
+
+    logger = logging.getLogger(LOGGER_NAME)
+    for handler in list(logger.handlers):
+        if isinstance(handler, logging.handlers.RotatingFileHandler):
+            logger.removeHandler(handler)
+            with suppress(Exception):
+                handler.close()
+    STATE.log_file = None
 
 
 def log_startup(logger: logging.Logger) -> None:

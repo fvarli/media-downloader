@@ -8,6 +8,7 @@ degraded experience rather than a failure.
 from __future__ import annotations
 
 import threading
+from collections.abc import Mapping
 from pathlib import Path
 
 from rich.console import Console
@@ -45,11 +46,17 @@ def serve(
     port: int = PREFERRED_PORT,
     open_browser_on_start: bool = True,
     verbose: bool = False,
+    env: Mapping[str, str] | None = None,
 ) -> int:
-    """Run the local web UI until interrupted. Returns a process exit code."""
+    """Run the local web UI until interrupted. Returns a process exit code.
+
+    ``env`` overrides where per-user data -- logs above all -- is resolved. It
+    defaults to the real environment; tests pass an isolated one so running the
+    server can never append to somebody's actual diagnostics log.
+    """
     # Diagnostics first: if anything below fails, the log is the only record a
     # packaged application leaves behind.
-    log_path = configure_file_logging()
+    log_path = configure_file_logging(dict(env) if env is not None else None)
     log_startup(logger)
 
     try:

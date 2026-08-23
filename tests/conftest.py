@@ -12,6 +12,46 @@ from media_downloader.ffmpeg import FFmpegStatus
 
 
 @pytest.fixture(autouse=True)
+def _isolated_app_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Give every test its own application-data root, before anything uses one.
+
+    This exists because of a real defect. ``launcher.serve()`` configured file
+    logging against the user's actual directory, and the tests that exercise it
+    attached a RotatingFileHandler pointing at ``~/.local/share/...`` to the
+    module-global logger. A handler outlives the call that created it, so from
+    that moment every later test in the session appended to a real person's
+    diagnostics log -- which then showed up in a support report they exported.
+
+    Two things therefore have to be true, and patching a path only gives the
+    first:
+
+    * every per-user path resolves inside tmp_path;
+    * no file handler survives into, or out of, a test.
+
+    Redirecting HOME and the platform-specific variables covers each rule the
+    application uses -- XDG_DATA_HOME on Linux, LOCALAPPDATA on Windows, and
+    HOME on macOS via ~/Library/Application Support.
+    """
+    from media_downloader import diagnostics
+
+    root = tmp_path / "app-data"
+    root.mkdir(parents=True, exist_ok=True)
+    for name in ("XDG_DATA_HOME", "LOCALAPPDATA", "HOME", "USERPROFILE"):
+        monkeypatch.setenv(name, str(root))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: root))
+
+    # Start from a clean slate and leave one behind, so a handler opened by one
+    # test can never be inherited by the next.
+    diagnostics.remove_file_logging()
+    diagnostics.STATE = diagnostics.DiagnosticsState()
+    try:
+        yield root
+    finally:
+        diagnostics.remove_file_logging()
+        diagnostics.STATE = diagnostics.DiagnosticsState()
+
+
+@pytest.fixture(autouse=True)
 def _no_real_os_interaction(monkeypatch: pytest.MonkeyPatch) -> None:
     """Fail fast if a test would invoke real desktop UI.
 
