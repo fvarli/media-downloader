@@ -29,6 +29,8 @@ const el = {
   recent: $('recent'), recentList: $('recent-list'),
   services: $('services'), downloadDir: $('download-dir'), openFolder: $('open-folder'),
   tool: $('tool'),
+  exportReport: $('export-report'), copyDiagnostics: $('copy-diagnostics'),
+  openLogs: $('open-logs'), helpResult: $('help-result'),
 };
 
 // --- api -----------------------------------------------------------
@@ -118,6 +120,8 @@ function renderStatus() {
       row('Failed', ''),
       text('status__name', job.error?.message || 'The download failed.'),
       ...(job.error?.hint ? [text('status__hint', job.error.hint)] : []),
+      // A short code the user can quote; the same one is in the log.
+      ...(job.error?.error_id ? [text('status__id', `Error ID: ${job.error.error_id}`)] : []),
     );
     return;
   }
@@ -375,6 +379,40 @@ el.modeAudio.addEventListener('click', () => {
 el.openFolder.addEventListener('click', async () => {
   try { await api('/api/open-folder', { method: 'POST', body: '{}' }); }
   catch (err) { state.error = { message: err.message, hint: err.hint }; render(); }
+});
+
+function helpMessage(message, isError = false) {
+  el.helpResult.textContent = message;
+  el.helpResult.className = isError ? 'help__result help__result--error' : 'help__result';
+}
+
+el.exportReport.addEventListener('click', async () => {
+  helpMessage('Writing report…');
+  try {
+    const result = await api('/api/diagnostics/export', { method: 'POST', body: '{}' });
+    helpMessage(`Saved ${result.filename} to your downloads folder.`);
+  } catch (err) {
+    helpMessage(err.message, true);
+  }
+});
+
+el.copyDiagnostics.addEventListener('click', async () => {
+  try {
+    const data = await api('/api/diagnostics');
+    await navigator.clipboard.writeText(data.report);
+    helpMessage('Diagnostics copied to the clipboard.');
+  } catch (err) {
+    helpMessage(err.message || 'Could not copy diagnostics.', true);
+  }
+});
+
+el.openLogs.addEventListener('click', async () => {
+  try {
+    await api('/api/open-logs', { method: 'POST', body: '{}' });
+    helpMessage('Opened the log folder.');
+  } catch (err) {
+    helpMessage(err.message, true);
+  }
 });
 
 if (navigator.clipboard?.readText) {

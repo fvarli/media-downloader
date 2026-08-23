@@ -366,3 +366,28 @@ def test_processing_is_only_reported_after_downloading_starts(
     assert current.state is JobState.PREPARING
     block.set()
     wait_until_done(manager, job.id)
+
+
+def test_an_unexpected_job_failure_gets_an_error_id(request_for: Any) -> None:
+    """The UI shows a code the user can quote; the log holds the detail."""
+    manager, _ = manager_for(error=RuntimeError("internal explosion"))
+    job = manager.submit(request_for())
+    done = wait_until_done(manager, job.id)
+
+    assert done.error is not None
+    assert done.error.error_id is not None
+    assert done.error.error_id.startswith("MD-")
+    # The raw internal message is not shown to the user.
+    assert "internal explosion" not in done.error.message
+    assert done.error.error_id in (done.error.hint or "")
+    assert done.snapshot()["error"]["error_id"] == done.error.error_id
+
+
+def test_an_expected_failure_gets_no_error_id(request_for: Any) -> None:
+    """A private video is not a bug; it needs no diagnostic code."""
+    manager, _ = manager_for(error=MediaUnavailableError("private video"))
+    done = wait_until_done(manager, manager.submit(request_for()).id)
+
+    assert done.error is not None
+    assert done.error.error_id is None
+    assert done.error.message == "private video"

@@ -239,8 +239,11 @@ class ToolManager:
             self._fetch(spec.url, archive, max_bytes=int(spec.size_bytes * SIZE_TOLERANCE))
 
             # Nothing is unpacked, let alone executed, before this passes.
+            logger.info("verifying %s checksum", tool)
             verify_sha256(archive, spec.sha256)
+            logger.info("%s checksum verified", tool)
 
+            logger.info("extracting %s", tool)
             unpacked = staging / "unpacked"
             unpacked.mkdir()
             written = extract_members(archive, unpacked, spec.members)

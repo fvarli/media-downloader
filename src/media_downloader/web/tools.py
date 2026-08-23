@@ -13,6 +13,7 @@ from __future__ import annotations
 import threading
 from typing import Any
 
+from media_downloader.diagnostics import record_error
 from media_downloader.errors import MediaDownloaderError
 from media_downloader.ffmpeg import FFmpegStatus, detect_ffmpeg
 from media_downloader.jsruntime import detect_js_runtime
@@ -144,6 +145,7 @@ class ToolInstaller:
             self._installing.add(tool)
             self._errors.pop(tool, None)
 
+        logger.info("install %s requested", tool)
         thread = threading.Thread(
             target=self._run, args=(tool,), daemon=True, name=f"install-{tool}"
         )
@@ -155,8 +157,12 @@ class ToolInstaller:
         try:
             self._manager.install(tool)
         except BaseException as exc:  # a worker must never let anything escape
-            message = exc.message if isinstance(exc, MediaDownloaderError) else str(exc)
-            logger.debug("Installing %s failed: %s", tool, message)
+            if isinstance(exc, MediaDownloaderError):
+                message = exc.message
+                logger.warning("install %s failed: %s", tool, message)
+            else:
+                error_id = record_error(logger, exc, context=f"installing {tool}")
+                message = f"Installation failed unexpectedly. Error ID: {error_id}"
             with self._lock:
                 self._errors[tool] = message
         finally:

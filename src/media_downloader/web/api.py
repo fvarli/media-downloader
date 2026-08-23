@@ -22,11 +22,18 @@ from media_downloader.config import (
     QUALITY_CHOICES,
     build_request,
 )
+from media_downloader.diagnostics import (
+    STATE,
+    build_support_report,
+    describe_environment,
+    report_filename,
+)
 from media_downloader.errors import MediaDownloaderError
+from media_downloader.paths import ensure_dir
 from media_downloader.service import Environment, environment_notices
 from media_downloader.urls import SUPPORTED_SERVICE_NAMES, detect_service, validate_url
 from media_downloader.web.jobs import DownloadInProgressError, JobManager
-from media_downloader.web.system import open_folder
+from media_downloader.web.system import open_folder, open_log_folder
 from media_downloader.web.tools import ToolInstaller
 
 #: Exception -> HTTP status for failures detected while handling the request.
@@ -198,6 +205,79 @@ def install_tool(ctx: ApiContext, tool: str) -> tuple[int, dict[str, Any]]:
         return error_payload(exc)
 
     return 202, {"tools": ctx.tools.snapshot()}
+
+
+def _tool_summary(ctx: ApiContext, tool: str) -> str:
+    """One-line description of where a tool comes from, for the report."""
+    status = ctx.tools.status(tool)
+    version = f" {status.version}" if status.version else ""
+    return f"{status.state.value}{version}"
+
+
+def get_diagnostics(ctx: ApiContext) -> tuple[int, dict[str, Any]]:
+    """A support snapshot the user can read, copy or export.
+
+    Generated locally and returned only to this page. Nothing is uploaded, and
+    the report itself excludes the session token, cookies, credentials and
+    request headers by construction.
+    """
+    report = build_support_report(
+        download_dir=ctx.download_dir,
+        ffmpeg_summary=_tool_summary(ctx, "ffmpeg"),
+        js_summary=_tool_summary(ctx, "deno"),
+    )
+    last = STATE.last_error
+    return 200, {
+        "environment": describe_environment(),
+        "last_error": (
+            {"error_id": last.error_id, "type": last.error_type, "when": last.when}
+            if last is not None
+            else None
+        ),
+        "report": report,
+        "filename": report_filename(),
+    }
+
+
+def export_diagnostics(ctx: ApiContext) -> tuple[int, dict[str, Any]]:
+    """Write the support report next to the user's downloads.
+
+    A file they can find and attach to a message, rather than something they
+    have to select and copy out of a browser.
+    """
+    name = report_filename()
+    try:
+        directory = ensure_dir(ctx.download_dir)
+        target = directory / name
+        target.write_text(
+            build_support_report(
+                download_dir=ctx.download_dir,
+                ffmpeg_summary=_tool_summary(ctx, "ffmpeg"),
+                js_summary=_tool_summary(ctx, "deno"),
+            ),
+            encoding="utf-8",
+        )
+    except MediaDownloaderError as exc:
+        return error_payload(exc)
+    except OSError as exc:
+        return 500, {
+            "error": {
+                "code": "OUTPUT_ERROR",
+                "message": f"The report could not be written: {exc}",
+                "hint": str(ctx.download_dir),
+            }
+        }
+    return 200, {"filename": name, "path": str(target)}
+
+
+def open_logs(ctx: ApiContext) -> tuple[int, dict[str, Any] | None]:
+    """Open the log directory. Takes no path, by design."""
+    try:
+        open_log_folder()
+    except (MediaDownloaderError, OSError) as exc:
+        message = exc.message if isinstance(exc, MediaDownloaderError) else str(exc)
+        return 500, {"error": {"code": "OUTPUT_ERROR", "message": message, "hint": None}}
+    return 204, None
 
 
 def open_download_folder(ctx: ApiContext) -> tuple[int, dict[str, Any] | None]:

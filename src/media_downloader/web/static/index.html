@@ -57,6 +57,20 @@
     <ul class="recent__list" id="recent-list"></ul>
   </section>
 
+  <details class="help" id="help">
+    <summary class="help__summary">Help &amp; diagnostics</summary>
+    <p class="help__text">
+      If something goes wrong, export a support report and send it to whoever maintains this.
+      It is written to your downloads folder and is never uploaded anywhere.
+    </p>
+    <div class="help__actions">
+      <button class="button button--ghost" id="export-report" type="button">Export support report</button>
+      <button class="button button--ghost" id="copy-diagnostics" type="button">Copy diagnostics</button>
+      <button class="button button--ghost" id="open-logs" type="button">Open log folder</button>
+    </div>
+    <p class="help__result" id="help-result"></p>
+  </details>
+
   <footer class="app__footer">
     <p id="services"></p>
     <p class="app__path">Saving to <button class="linklike" id="open-folder" type="button"><span id="download-dir"></span></button></p>

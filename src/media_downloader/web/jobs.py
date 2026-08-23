@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from media_downloader.config import DownloadRequest
+from media_downloader.diagnostics import record_error
 from media_downloader.downloader import DownloadResult
 from media_downloader.errors import (
     DownloadFailedError,
@@ -93,20 +94,28 @@ class JobProgress:
 
 @dataclass(frozen=True)
 class JobError:
-    """A failure, in the same words the CLI would have printed."""
+    """A failure, in the same words the CLI would have printed.
+
+    ``error_id`` is present only for unexpected internal failures. It is the
+    short code shown in the interface and written to the log, so a user can
+    quote it and have the matching entry found.
+    """
 
     code: str
     message: str
     hint: str | None = None
+    error_id: str | None = None
 
     @classmethod
     def from_exception(cls, exc: BaseException) -> JobError:
         if isinstance(exc, MediaDownloaderError):
             return cls(code=_error_code(exc), message=exc.message, hint=exc.hint)
+        error_id = record_error(logger, exc, context="download job failed")
         return cls(
             code="UNEXPECTED_ERROR",
-            message=f"An unexpected error occurred: {exc}",
-            hint=None,
+            message="Something went wrong while downloading.",
+            hint=f"Error ID: {error_id}",
+            error_id=error_id,
         )
 
 
@@ -181,7 +190,12 @@ class Job:
                 else None
             ),
             "error": (
-                {"code": self.error.code, "message": self.error.message, "hint": self.error.hint}
+                {
+                    "code": self.error.code,
+                    "message": self.error.message,
+                    "hint": self.error.hint,
+                    "error_id": self.error.error_id,
+                }
                 if self.error is not None
                 else None
             ),
@@ -287,6 +301,7 @@ class JobManager:
     def _set_state(self, job: Job, state: JobState) -> None:
         with self._lock:
             job.state = state
+        logger.info("job %s state=%s", job.id, state.value)
 
     def _complete(self, job: Job, result: DownloadResult) -> None:
         with self._lock:

@@ -215,3 +215,83 @@ def test_applescript_quoting_escapes_dangerous_characters() -> None:
     quoted = system._applescript_string('say "hi" \\ then')
     assert quoted.startswith('"') and quoted.endswith('"')
     assert '\\"' in quoted
+
+
+# --- startup-error dialog ----------------------------------------------
+
+
+def test_startup_error_carries_the_id_and_log_location(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(system, "current_platform", lambda: "linux")
+    system.show_startup_error("Port 8765 is in use.", "MD-20260823-A1B2C3", Path("/logs"))
+
+    err = capsys.readouterr().err
+    assert "could not start" in err
+    assert "MD-20260823-A1B2C3" in err
+    assert "/logs" in err
+
+
+def test_startup_error_shows_no_traceback(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A stack trace helps nobody who cannot read one."""
+    monkeypatch.setattr(system, "current_platform", lambda: "linux")
+    system.show_startup_error("Something failed.", "MD-1", None)
+    err = capsys.readouterr().err
+    assert "Traceback" not in err and 'File "' not in err
+
+
+def test_startup_error_uses_a_message_box_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[Any, ...]] = []
+
+    class FakeUser32:
+        @staticmethod
+        def MessageBoxW(*args: Any) -> int:  # noqa: N802 - Win32 naming
+            calls.append(args)
+            return 1
+
+    monkeypatch.setattr(system, "current_platform", lambda: "win32")
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "ctypes",
+        type("C", (), {"windll": type("W", (), {"user32": FakeUser32})}),
+    )
+    system.show_startup_error("nope", "MD-XYZ", None)
+    assert calls and "MD-XYZ" in calls[0][1]
+
+
+def test_startup_error_uses_osascript_on_macos(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[Any] = []
+    monkeypatch.setattr(system, "current_platform", lambda: "darwin")
+    monkeypatch.setattr(
+        system.subprocess, "run", lambda command, **kw: captured.append((command, kw))
+    )
+    system.show_startup_error("nope", "MD-XYZ", None)
+
+    command, kwargs = captured[0]
+    assert command[0] == "osascript" and isinstance(command, list)
+    assert kwargs.get("shell") is not True
+    assert kwargs.get("timeout")
+
+
+# --- open log folder ---------------------------------------------------
+
+
+def test_open_log_folder_takes_no_caller_supplied_path() -> None:
+    """Same rule as Open Downloads Folder: no path may come from outside."""
+    import inspect
+
+    params = list(inspect.signature(system.open_log_folder).parameters)
+    assert params == ["env"]
+
+
+def test_open_log_folder_targets_the_log_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opened: list[Path] = []
+    monkeypatch.setattr("media_downloader.paths.current_platform", lambda: "linux")
+    monkeypatch.setattr(system, "open_folder", opened.append)
+    system.open_log_folder({"XDG_DATA_HOME": str(tmp_path)})
+
+    assert opened == [tmp_path / "media-downloader" / "logs"]

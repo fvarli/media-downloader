@@ -111,23 +111,43 @@ def open_folder(directory: Path) -> None:
 def report_startup_url(url: str) -> None:
     """Show the local address when a browser could not be opened for it.
 
-    A packaged double-clickable application has no console, so the address
-    printed at startup would go nowhere. Rather than leave the user staring at
-    nothing, put it somewhere they will actually see.
-
-    Best effort by design: failing to show a dialog must never stop the server
-    that is already running and usable.
+    A packaged application has no console, so the address printed at startup
+    would go nowhere. Rather than leave the user staring at nothing, put it
+    somewhere they will actually see.
     """
-    message = f"Media Downloader is running.\n\nOpen this address in your browser:\n{url}"
+    _show_dialog(f"Media Downloader is running.\n\nOpen this address in your browser:\n{url}")
+
+
+def show_startup_error(message: str, error_id: str, log_dir: Path | None = None) -> None:
+    """Tell the user the application could not start at all.
+
+    Some failures happen before the interface exists: the data directory cannot
+    be created, the port will not bind, bundled assets are missing. In a
+    packaged build there is no console left to print to, so this is the only
+    channel. It carries a short human-readable reason, the error ID they can
+    quote, and where the logs are -- never a traceback.
+    """
+    lines = ["Media Downloader could not start.", "", message, "", f"Error ID: {error_id}"]
+    if log_dir is not None:
+        lines += ["", "Diagnostic logs:", str(log_dir)]
+    _show_dialog("\n".join(lines))
+
+
+def _show_dialog(message: str) -> None:
+    """Put ``message`` in front of the user by whatever means the OS offers.
+
+    Best effort by design: failing to show a dialog must never stop a server
+    that is already running, nor mask the error it was trying to report.
+    """
     platform = current_platform()
     try:
         if platform == "win32":
             import ctypes
 
-            # getattr for the same reason as os.startfile above: windll does
-            # not exist off Windows, so direct access fails type checking on
-            # Linux and macOS. MB_OK | MB_ICONINFORMATION; a message box takes
-            # no command line, so nothing in the text is parsed as syntax.
+            # getattr for the same reason as os.startfile: windll does not
+            # exist off Windows, so direct access fails type checking on Linux
+            # and macOS. MB_OK | MB_ICONINFORMATION; a message box takes no
+            # command line, so nothing in the text is parsed as syntax.
             windll = getattr(ctypes, "windll")  # noqa: B009
             windll.user32.MessageBoxW(None, message, "Media Downloader", 0x40)
             return
@@ -136,13 +156,13 @@ def report_startup_url(url: str) -> None:
                 f"display dialog {_applescript_string(message)} "
                 'with title "Media Downloader" buttons {"OK"} default button "OK"'
             )
-            # argv list, never a shell string. Bounded: this runs on a
-            # background thread and a dialog nobody is there to dismiss must
+            # argv list, never a shell string. Bounded: this can run on a
+            # background thread, and a dialog nobody is there to dismiss must
             # not pin a subprocess for the life of the process.
             subprocess.run(["osascript", "-e", script], check=False, timeout=DIALOG_TIMEOUT_SECONDS)
             return
     except Exception:  # pragma: no cover - a dialog must never be fatal
-        logger.debug("Could not display the startup address dialog.")
+        logger.debug("Could not display a dialog.")
     # Linux, and the fallback everywhere else, is the console we already have.
     print(message, file=sys.stderr)
 
@@ -151,6 +171,18 @@ def _applescript_string(value: str) -> str:
     """Quote a string for AppleScript, escaping backslashes and quotes."""
     escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
     return f'"{escaped}"'
+
+
+def open_log_folder(env: dict[str, str] | None = None) -> None:
+    """Open the application's own log directory.
+
+    Takes no path from anywhere: the directory is derived from the same
+    per-user rules the rest of the application uses, exactly like Open
+    Downloads Folder.
+    """
+    from media_downloader.paths import ensure_dir, logs_dir
+
+    open_folder(ensure_dir(logs_dir(env)))
 
 
 def open_browser(url: str) -> bool:

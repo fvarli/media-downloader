@@ -70,6 +70,15 @@ def tools_dir(env: Mapping[str, str] | None = None) -> Path:
     return app_data_dir(env) / "tools"
 
 
+def logs_dir(env: Mapping[str, str] | None = None) -> Path:
+    """Directory holding this application's own diagnostic log.
+
+    A packaged application has no console, so a failure that would have been a
+    line on a terminal has to land somewhere the user can find and send on.
+    """
+    return app_data_dir(env) / "logs"
+
+
 def tool_install_dir(tool: str, version: str, env: Mapping[str, str] | None = None) -> Path:
     """Directory for one specific version of one managed tool.
 

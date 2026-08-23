@@ -226,6 +226,9 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/tools":
             self._send_json(*api.get_tools(self._ctx))
             return
+        if path == "/api/diagnostics":
+            self._send_json(*api.get_diagnostics(self._ctx))
+            return
         if path.startswith("/api/downloads/"):
             self._send_json(*api.get_download(self._ctx, path.removeprefix("/api/downloads/")))
             return
@@ -253,6 +256,12 @@ class _Handler(BaseHTTPRequestHandler):
 
         if path == "/api/open-folder":
             self._send_json(*api.open_download_folder(self._ctx))
+            return
+        if path == "/api/open-logs":
+            self._send_json(*api.open_logs(self._ctx))
+            return
+        if path == "/api/diagnostics/export":
+            self._send_json(*api.export_diagnostics(self._ctx))
             return
 
         # The tool name is a fixed route segment, never a request parameter, so

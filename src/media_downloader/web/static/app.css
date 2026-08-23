@@ -187,3 +187,22 @@ select.input { appearance: none; cursor: pointer; padding-right: 34px;
 .tool__actions .button { flex: none; }
 .tool--busy .tool__title { color: var(--accent); }
 .tool--error .tool__title { color: var(--error); }
+
+/* --- help & diagnostics -------------------------------------------- */
+
+.help {
+  margin-top: 20px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+.help__summary { cursor: pointer; font-weight: 550; color: var(--muted); }
+.help__summary::marker { color: var(--muted); }
+.help__text { color: var(--muted); margin: 10px 0; }
+.help__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.help__actions .button { font-size: 13px; padding: 7px 12px; }
+.help__result { color: var(--muted); margin: 10px 0 0; word-break: break-word; }
+.help__result--error { color: var(--error); }
+.status__id { font-size: 12px; color: var(--muted); font-family: ui-monospace, monospace; }
