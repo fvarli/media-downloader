@@ -145,10 +145,10 @@ jobs:
       # Extracts with the platform's own tool and checks what an archive round
       # trip is known to destroy: the executable bit, the bundle structure,
       # and whether anything unwanted came along.
+      # One line on purpose: the default shell on Windows is pwsh, where a
+      # trailing backslash is not a line continuation.
       - name: Verify the archive extracts correctly
-        run: |
-          python packaging/verify_package.py "package/${{ matrix.archive }}" \
-            package/extracted --platform ${{ matrix.target }}
+        run: python packaging/verify_package.py "package/${{ matrix.archive }}" package/extracted --platform ${{ matrix.target }}
 
       # The point of the whole exercise: the smoke test now runs against the
       # extracted archive, which is exactly what the tester will double-click,
