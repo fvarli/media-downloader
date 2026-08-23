@@ -28,6 +28,7 @@ import re
 import secrets
 import sys
 import traceback
+from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -212,6 +213,39 @@ def log_startup(logger: logging.Logger) -> None:
             platform.system(),
             platform.machine(),
         )
+
+
+#: Internal validation only. Never documented, offered or exposed as a user
+#: feature -- users get the Diagnostics panel and the exported report.
+SELFTEST_ENV_VAR = "MD_DIAGNOSTIC_SELFTEST"
+
+
+class DiagnosticSelfTestError(RuntimeError):
+    """Synthetic failure raised only by the internal diagnostics self-test."""
+
+
+def run_selftest_if_requested(
+    logger: logging.Logger, env: Mapping[str, str] | None = None
+) -> str | None:
+    """Record one synthetic error so error-ID correlation can be checked.
+
+    An internal validation mechanism, not a feature: gated on an environment
+    variable, off by default, with no HTTP endpoint and no control anywhere in
+    the interface. It exists because a windowed build has no stdout, so the
+    only way to prove that the ID written to the log is the ID the application
+    reports back is to plant a known one and look for it in both places.
+
+    Carries no user data: the message is a fixed string, and it changes nothing
+    about how the application behaves.
+    """
+    source = os.environ if env is None else env
+    if source.get(SELFTEST_ENV_VAR) != "1":
+        return None
+    return record_error(
+        logger,
+        DiagnosticSelfTestError("diagnostic self-test"),
+        context="diagnostic self-test",
+    )
 
 
 def record_error(

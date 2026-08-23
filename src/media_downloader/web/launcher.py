@@ -7,13 +7,19 @@ degraded experience rather than a failure.
 
 from __future__ import annotations
 
+import os
 import threading
 from collections.abc import Mapping
 from pathlib import Path
 
 from rich.console import Console
 
-from media_downloader.diagnostics import configure_file_logging, log_startup, record_error
+from media_downloader.diagnostics import (
+    configure_file_logging,
+    log_startup,
+    record_error,
+    run_selftest_if_requested,
+)
 from media_downloader.logging_setup import get_logger
 from media_downloader.service import detect_environment
 from media_downloader.web.server import PREFERRED_PORT, WebAppConfig, WebServer
@@ -28,6 +34,18 @@ logger = get_logger("launcher")
 
 #: Give the server a moment to accept connections before the browser asks.
 BROWSER_DELAY_SECONDS = 0.4
+
+#: Internal validation only, like the diagnostics self-test: never documented,
+#: offered or exposed as a user feature. Automated checks run the packaged
+#: application on machines where opening a browser is either pointless or
+#: actively harmful -- a windowed build with no browser available falls back to
+#: a modal dialog, and a modal dialog on an unattended runner waits forever.
+NO_BROWSER_ENV_VAR = "MD_NO_BROWSER"
+
+
+def _browser_suppressed(env: Mapping[str, str] | None) -> bool:
+    source = os.environ if env is None else env
+    return source.get(NO_BROWSER_ENV_VAR) == "1"
 
 
 def _launch_browser(url: str) -> None:
@@ -86,11 +104,14 @@ def serve(
 
     logger.info("server listening on %s", server.url)
 
+    # Off unless an environment variable asks for it; see the function.
+    run_selftest_if_requested(logger, env)
+
     console.print(f"[bold]Media Downloader[/bold] is running at [cyan]{server.url}[/cyan]")
     console.print(f"[dim]Saving downloads to {target_dir}[/dim]")
     console.print("[dim]Press Ctrl+C to stop.[/dim]")
 
-    if open_browser_on_start:
+    if open_browser_on_start and not _browser_suppressed(env):
         # Deferred so the socket is definitely accepting before the browser
         # asks. If no browser can be opened -- headless, SSH, or a packaged app
         # with no console -- the address is surfaced some other way instead.

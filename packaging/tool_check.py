@@ -18,6 +18,16 @@ from media_downloader.tools.manager import ToolManager
 from media_downloader.tools.manifest import executable_name, lookup
 
 
+def _isolated(root: str) -> dict[str, str]:
+    """Point every platform's app-data rule at a temporary root.
+
+    Linux reads XDG_DATA_HOME, Windows LOCALAPPDATA, macOS HOME by way of
+    ~/Library/Application Support -- so overriding only the first two left
+    macOS resolving the runner's real directory.
+    """
+    return {"XDG_DATA_HOME": root, "LOCALAPPDATA": root, "HOME": root, "USERPROFILE": root}
+
+
 def main() -> int:
     tool = sys.argv[1]
     spec = lookup(tool, sys.platform, __import__("platform").machine())
@@ -26,10 +36,13 @@ def main() -> int:
         print(f"  {tool}: no verified source for this platform -- reported as unsupported.")
         print("  This is a recorded limitation, not a build failure.")
         # Prove the application agrees rather than just asserting it here.
-        manager = ToolManager()
-        status = manager.status(tool, system_path=None)
-        assert status.state.value == "unsupported", status
-        assert not status.can_install, "an unsupported tool must never offer an install"
+        # Isolated even though this path installs nothing: a check must never
+        # be able to resolve, let alone touch, the runner's real app data.
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = ToolManager(env=_isolated(tmp))
+            status = manager.status(tool, system_path=None)
+            assert status.state.value == "unsupported", status
+            assert not status.can_install, "an unsupported tool must never offer an install"
         print("  application reports: unsupported, install not offered  PASS")
         return 0
 
@@ -38,8 +51,7 @@ def main() -> int:
     print(f"    sha256 {spec.sha256}")
 
     with tempfile.TemporaryDirectory() as tmp:
-        env = {"XDG_DATA_HOME": tmp, "LOCALAPPDATA": tmp}
-        manager = ToolManager(env=env)
+        manager = ToolManager(env=_isolated(tmp))
 
         assert manager.managed_dir(tool) is None, "should start uninstalled"
         installed = manager.install(tool)

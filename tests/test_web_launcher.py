@@ -141,3 +141,58 @@ def test_the_default_download_directory_is_used_when_none_is_given(
     out, _ = console
     launcher.serve(out, open_browser_on_start=False)
     assert RecordingServer.instances[0].config.download_dir == tmp_path / "Chosen"
+
+
+# -- internal no-browser switch ------------------------------------------
+
+
+def _serve_and_capture_browser(
+    monkeypatch: pytest.MonkeyPatch,
+    console: tuple[Console, io.StringIO],
+    tmp_path: Path,
+    env: dict[str, str],
+) -> int:
+    opened: list[str] = []
+    monkeypatch.setattr(
+        launcher, "WebServer", lambda config: RecordingServer(config, interrupt=True)
+    )
+    monkeypatch.setattr(launcher, "open_browser", lambda url: opened.append(url) or True)
+    monkeypatch.setattr(launcher, "BROWSER_DELAY_SECONDS", 0.0)
+    # The fallback is a modal dialog on macOS and Windows; never let it run.
+    monkeypatch.setattr(launcher, "report_startup_url", lambda url: None)
+
+    out, _ = console
+    launcher.serve(out, download_dir=tmp_path, open_browser_on_start=True, env=env)
+    for _ in range(100):
+        if opened:
+            break
+        time.sleep(0.01)
+    return len(opened)
+
+
+def test_the_browser_opens_by_default(
+    monkeypatch: pytest.MonkeyPatch, console: tuple[Console, io.StringIO], tmp_path: Path
+) -> None:
+    assert _serve_and_capture_browser(monkeypatch, console, tmp_path, env={}) == 1
+
+
+def test_the_internal_switch_suppresses_the_browser(
+    monkeypatch: pytest.MonkeyPatch, console: tuple[Console, io.StringIO], tmp_path: Path
+) -> None:
+    """Automated checks must never open a browser or a modal dialog.
+
+    A windowed build that cannot launch a browser falls back to a dialog, and
+    an unattended runner has nobody to dismiss it.
+    """
+    env = {"MD_NO_BROWSER": "1"}
+    assert _serve_and_capture_browser(monkeypatch, console, tmp_path, env=env) == 0
+
+
+@pytest.mark.parametrize("env", [{"MD_NO_BROWSER": "0"}, {"MD_NO_BROWSER": "true"}, {"OTHER": "1"}])
+def test_only_the_exact_value_suppresses_the_browser(
+    monkeypatch: pytest.MonkeyPatch,
+    console: tuple[Console, io.StringIO],
+    tmp_path: Path,
+    env: dict[str, str],
+) -> None:
+    assert _serve_and_capture_browser(monkeypatch, console, tmp_path, env=env) == 1

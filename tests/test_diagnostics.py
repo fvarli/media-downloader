@@ -291,3 +291,54 @@ def test_the_report_filename_is_dated() -> None:
     assert report_filename(datetime(2026, 8, 23, tzinfo=timezone.utc)) == (
         "media-downloader-diagnostics-2026-08-23.txt"
     )
+
+
+# -- internal self-test hook ---------------------------------------------
+#
+# Deliberately not a user feature: an internal mechanism for proving that the
+# error ID in the log is the error ID the application reports, on builds that
+# have no stdout to read. These tests exist to keep it inert and invisible.
+
+
+def test_the_selftest_does_nothing_unless_asked(caplog: pytest.LogCaptureFixture) -> None:
+    logger = logging.getLogger("media_downloader.selftest-off")
+    for env in ({}, {"MD_DIAGNOSTIC_SELFTEST": "0"}, {"MD_DIAGNOSTIC_SELFTEST": "true"}):
+        diagnostics.STATE.last_error = None
+        with caplog.at_level(logging.ERROR):
+            assert diagnostics.run_selftest_if_requested(logger, env) is None
+        assert diagnostics.STATE.last_error is None
+
+
+def test_the_selftest_records_a_correlatable_error_when_asked(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    logger = logging.getLogger("media_downloader.selftest-on")
+    with caplog.at_level(logging.ERROR):
+        error_id = diagnostics.run_selftest_if_requested(logger, {"MD_DIAGNOSTIC_SELFTEST": "1"})
+
+    assert error_id is not None
+    assert error_id in caplog.text  # the log half of the correlation
+    last = diagnostics.STATE.last_error
+    assert last is not None
+    assert last.error_id == error_id  # the reported half
+    assert last.error_type == "DiagnosticSelfTestError"
+
+
+def test_the_selftest_carries_no_user_data() -> None:
+    logger = logging.getLogger("media_downloader.selftest-safe")
+    diagnostics.run_selftest_if_requested(logger, {"MD_DIAGNOSTIC_SELFTEST": "1"})
+    last = diagnostics.STATE.last_error
+    assert last is not None
+    assert last.message == "diagnostic self-test"
+
+
+def test_the_selftest_is_not_reachable_over_http() -> None:
+    """No endpoint and no interface control -- only the environment variable."""
+    from media_downloader.web import api
+
+    static = Path(api.__file__).parent / "static"
+    surfaces = [Path(api.__file__).read_text()]
+    surfaces += [p.read_text() for p in static.iterdir() if p.is_file()]
+    for text in surfaces:
+        assert "MD_DIAGNOSTIC_SELFTEST" not in text
+        assert "selftest" not in text.lower()

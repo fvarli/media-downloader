@@ -35,16 +35,35 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - label: macOS arm64
+          # macOS and Windows build the shape a user would actually
+          # double-click: windowed, no terminal. Nothing about the packaging
+          # changes -- only whether a console is attached -- but that is
+          # precisely the difference nobody had exercised, and it is the
+          # difference that makes stdout unavailable to CI.
+          - label: macOS arm64 (windowed)
             os: macos-latest
             artifact: Media-Downloader-macOS-arm64
-          - label: Windows x64
+            windowed: '1'
+            mode: windowed
+            artifact_path: dist/Media Downloader.app
+            exe: dist/Media Downloader.app/Contents/MacOS/media-downloader
+          - label: Windows x64 (windowed)
             os: windows-latest
             artifact: Media-Downloader-Windows-x64
-          - label: Linux x86_64
+            windowed: '1'
+            mode: windowed
+            artifact_path: dist/media-downloader
+            exe: dist/media-downloader/media-downloader.exe
+          # Linux has no windowed/console distinction to make, and a console
+          # build keeps one artifact where printed output is still checked.
+          - label: Linux x86_64 (console)
             # Oldest available runner, for the lowest practical glibc floor.
             os: ubuntu-22.04
             artifact: Media-Downloader-Linux-x86_64
+            windowed: '0'
+            mode: console
+            artifact_path: dist/media-downloader
+            exe: dist/media-downloader/media-downloader
 
     steps:
       - uses: actions/checkout@v7
@@ -59,12 +78,14 @@ jobs:
           python -m pip install -e ".[dev,packaging]"
 
       - name: Build the frozen application
+        env:
+          MD_WINDOWED_BUILD: ${{ matrix.windowed }}
         run: python -m PyInstaller packaging/media-downloader.spec --noconfirm
 
       # Deterministic and offline. This is the check that must stay green: it
       # exercises the built executable, not the source tree.
       - name: Smoke-test the artifact
-        run: python packaging/smoke_test.py dist/media-downloader
+        run: python packaging/smoke_test.py "${{ matrix.artifact_path }}" --mode ${{ matrix.mode }}
 
       - name: Managed Deno install and discovery
         run: python packaging/tool_check.py deno
@@ -78,7 +99,7 @@ jobs:
       - name: Artifact metadata and checksum
         shell: bash
         run: |
-          python packaging/artifact_info.py dist/media-downloader dist/artifact-info.json
+          python packaging/artifact_info.py "${{ matrix.artifact_path }}" dist/artifact-info.json
           cat dist/artifact-info.json
 
       # Clearly separated and non-blocking: a transient change at an external
@@ -88,8 +109,10 @@ jobs:
         continue-on-error: true
         shell: bash
         run: |
-          ./dist/media-downloader/media-downloader "https://www.youtube.com/watch?v=jNQXAC9IVRw" --info ||
-          ./dist/media-downloader/media-downloader.exe "https://www.youtube.com/watch?v=jNQXAC9IVRw" --info
+          # The exit code is the signal here. A windowed build prints nowhere,
+          # so this step proves the frozen extractor can still reach the
+          # network -- not what it printed.
+          "${{ matrix.exe }}" "https://www.youtube.com/watch?v=jNQXAC9IVRw" --info
 
       - uses: actions/upload-artifact@v4
         with:
