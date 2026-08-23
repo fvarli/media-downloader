@@ -87,21 +87,53 @@ class Fetcher(Protocol):
     def __call__(self, url: str, destination: Path, *, max_bytes: int) -> None: ...
 
 
+class HTTPSOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Follows redirects only while they stay on HTTPS.
+
+    Checking the URL we were given is not enough on its own: ``urlopen``
+    follows redirects, and the default handler is happy to follow one to
+    ``http://``. Every download we pin redirects at least once -- GitHub sends
+    release assets to objects.githubusercontent.com -- so the hop is the normal
+    path, not an edge case, and it is unverified by the initial scheme check.
+
+    Fails closed. A download that cannot stay on HTTPS does not happen.
+    """
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: object,
+        code: int,
+        msg: str,
+        headers: object,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        scheme = urlsplit(newurl).scheme
+        if scheme != "https":
+            raise ToolInstallError(
+                "Refusing a download that redirected away from HTTPS.",
+                hint="The download was stopped before anything was written.",
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)  # type: ignore[arg-type]
+
+
 def https_fetch(url: str, destination: Path, *, max_bytes: int) -> None:
     """Fetch ``url`` over HTTPS into ``destination``.
 
     Refuses any non-HTTPS URL even though the manifest is the only caller --
     a second check costs nothing and means a future manifest typo cannot
-    silently downgrade the transport.
+    silently downgrade the transport. Redirects are held to the same rule; see
+    :class:`HTTPSOnlyRedirectHandler`.
     """
     if urlsplit(url).scheme != "https":
         raise ToolInstallError(f"Refusing a non-HTTPS download URL: {url}")
 
     request = urllib.request.Request(url, headers={"User-Agent": "media-downloader"})
+    opener = urllib.request.build_opener(HTTPSOnlyRedirectHandler)
     written = 0
     try:
         with (
-            urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response,
+            opener.open(request, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response,
             destination.open("wb") as out,
         ):
             while True:

@@ -6,6 +6,8 @@ Every test here is offline: the network layer is injected.
 from __future__ import annotations
 
 import hashlib
+import inspect
+import urllib.request
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -318,6 +320,56 @@ def test_https_is_enforced_by_the_real_fetcher(tmp_path: Path) -> None:
 
     with pytest.raises(ToolInstallError, match="non-HTTPS"):
         https_fetch("http://example.invalid/x.zip", tmp_path / "out", max_bytes=10)
+
+
+# -- redirects ----------------------------------------------------------
+#
+# Checking the URL we were handed is not enough: urlopen follows redirects, and
+# the stock handler will happily follow one to http://. Every URL the manifest
+# pins redirects at least once -- GitHub sends release assets off to
+# objects.githubusercontent.com -- so this hop is the normal path, and until
+# now nothing re-checked it.
+
+
+def _redirect_to(target: str) -> Any:
+    from media_downloader.tools.manager import HTTPSOnlyRedirectHandler
+
+    handler = HTTPSOnlyRedirectHandler()
+    request = urllib.request.Request("https://example.invalid/tool.zip")
+    return lambda: handler.redirect_request(request, None, 302, "Found", {}, target)
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "http://example.invalid/tool.zip",
+        "http://objects.example.invalid/tool.zip",
+        "ftp://example.invalid/tool.zip",
+        "file:///etc/passwd",
+    ],
+)
+def test_a_redirect_off_https_is_refused(target: str) -> None:
+    """Fails closed: a download that cannot stay on HTTPS does not happen."""
+    with pytest.raises(ToolInstallError, match="redirected away from HTTPS"):
+        _redirect_to(target)()
+
+
+def test_a_redirect_that_stays_on_https_is_followed() -> None:
+    """The hardening must not break the hop every real download makes."""
+    redirected = _redirect_to("https://objects.githubusercontent.com/tool.zip")()
+    assert redirected is not None
+    assert redirected.full_url == "https://objects.githubusercontent.com/tool.zip"
+
+
+def test_the_fetcher_installs_the_redirect_handler() -> None:
+    """A handler nothing is wired to would protect nothing."""
+    from media_downloader.tools.manager import HTTPSOnlyRedirectHandler, https_fetch
+
+    source = inspect.getsource(https_fetch)
+    assert "build_opener(HTTPSOnlyRedirectHandler)" in source
+    assert "opener.open(" in source
+    assert "urllib.request.urlopen(" not in source
+    assert issubclass(HTTPSOnlyRedirectHandler, urllib.request.HTTPRedirectHandler)
 
 
 # -- discovery ----------------------------------------------------------
