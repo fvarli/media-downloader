@@ -95,9 +95,15 @@ def _managed_deno_path() -> Path | None:
     """
     try:
         from media_downloader.tools.manager import ToolManager
-        from media_downloader.tools.manifest import DENO
+        from media_downloader.tools.manifest import DENO, executable_name
 
-        return ToolManager().managed_path(DENO, "deno")
+        manager = ToolManager()
+        spec = manager.spec_for(DENO)
+        if spec is None:
+            return None
+        # The manifest knows whether this platform's binary is "deno" or
+        # "deno.exe"; guessing here would silently miss it on Windows.
+        return manager.managed_path(DENO, executable_name(spec, "deno"))
     except Exception:  # pragma: no cover - discovery must never break startup
         return None
 

@@ -68,6 +68,61 @@ _MANIFEST: dict[tuple[str, str, str], ToolSpec] = {
         licence="LGPL-2.1-or-later",
         source="https://github.com/BtbN/FFmpeg-Builds",
     ),
+    (FFMPEG, "windows", "x86_64"): ToolSpec(
+        tool=FFMPEG,
+        version="n9.0.1",
+        url=(
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/"
+            "autobuild-2026-08-21-13-40/"
+            "ffmpeg-n9.0.1-6-g9d4ca21220-win64-lgpl-9.0.zip"
+        ),
+        sha256="a2f743d8147830640bb98004501466edccc5dec31d12b60bdd31e2e261dff542",
+        size_bytes=147_000_000,
+        # Windows archives carry the .exe suffix, and the file has to be
+        # written under its real name or shutil.which will not find it.
+        members=MappingProxyType(
+            {"ffmpeg.exe": "bin/ffmpeg.exe", "ffprobe.exe": "bin/ffprobe.exe"}
+        ),
+        licence="LGPL-2.1-or-later",
+        source="https://github.com/BtbN/FFmpeg-Builds",
+    ),
+    # There is deliberately no (FFMPEG, "macos", ...) entry. No provider was
+    # found that meets every requirement at once: evermeet.cx is the only macOS
+    # source linked from ffmpeg.org but publishes no SHA-256 (PGP signatures
+    # only) and ships ffmpeg and ffprobe as separate archives, while
+    # osxexperts.net publishes checksums but behind a mutable major-version URL
+    # and without configure flags, so GPL and nonfree components cannot be ruled
+    # out. Reporting the target as unsupported is better than pinning a hash we
+    # cannot stand behind.
+    (DENO, "macos", "arm64"): ToolSpec(
+        tool=DENO,
+        version="2.9.5",
+        url=(
+            "https://github.com/denoland/deno/releases/download/"
+            "v2.9.5/deno-aarch64-apple-darwin.zip"
+        ),
+        sha256="b796aadd131f6930560c1ee040cf0d6f53933fbb987464e9ff46bd7ea4830615",
+        size_bytes=38_500_000,
+        members=MappingProxyType({"deno": "deno"}),
+        licence="MIT",
+        source="https://github.com/denoland/deno",
+    ),
+    (DENO, "windows", "x86_64"): ToolSpec(
+        tool=DENO,
+        version="2.9.5",
+        url=(
+            "https://github.com/denoland/deno/releases/download/"
+            "v2.9.5/deno-x86_64-pc-windows-msvc.zip"
+        ),
+        # Deno's Windows sidecar is PowerShell Get-FileHash output, so the
+        # published value is upper case; normalised here, and verify.py
+        # compares case-insensitively anyway.
+        sha256="171efab55ac6b9881fd53ee4c20f8bf3bb1340ffc618483746909014db12216a",
+        size_bytes=41_600_000,
+        members=MappingProxyType({"deno.exe": "deno.exe"}),
+        licence="MIT",
+        source="https://github.com/denoland/deno",
+    ),
     (DENO, "linux", "x86_64"): ToolSpec(
         tool=DENO,
         version="2.9.5",
@@ -112,6 +167,18 @@ def lookup(tool: str, platform: str, machine: str) -> ToolSpec | None:
     source for this combination yet.
     """
     return _MANIFEST.get((tool, normalise_platform(platform), normalise_arch(machine)))
+
+
+def executable_name(spec: ToolSpec, logical: str) -> str:
+    """The on-disk filename for a logical executable, e.g. ``deno`` -> ``deno.exe``.
+
+    Platforms disagree about suffixes, so the manifest is the authority rather
+    than a caller guessing.
+    """
+    for name in spec.executables:
+        if name == logical or name.startswith(f"{logical}."):
+            return name
+    return logical
 
 
 def available_tools() -> tuple[str, ...]:

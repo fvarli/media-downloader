@@ -140,6 +140,30 @@ def test_a_system_tool_is_reported_and_not_offered(
         assert entry["can_install"] is False
 
 
+def test_macos_offers_deno_but_never_ffmpeg(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """macOS has a verified Deno source but no acceptable FFmpeg one.
+
+    The UI must reflect that honestly: no install button for a target we have
+    no trustworthy binary for.
+    """
+    installer, _ = make_installer(tmp_path, monkeypatch)
+    installer._manager = ToolManager(
+        env={"XDG_DATA_HOME": str(tmp_path / "d")},
+        fetcher=lambda *a, **k: None,
+        platform_name=lambda: "darwin",
+        machine=lambda: "arm64",
+    )
+    _, body = api.get_tools(context(tmp_path, installer))
+    entries = {t["tool"]: t for t in body["tools"]}
+
+    assert entries["ffmpeg"]["state"] == "unsupported"
+    assert entries["ffmpeg"]["can_install"] is False
+    assert entries["deno"]["state"] == "missing"
+    assert entries["deno"]["can_install"] is True
+
+
 def test_an_unsupported_platform_is_reported_not_offered(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -147,8 +171,8 @@ def test_an_unsupported_platform_is_reported_not_offered(
     installer._manager = ToolManager(
         env={"XDG_DATA_HOME": str(tmp_path / "d")},
         fetcher=lambda *a, **k: None,
-        platform_name=lambda: "darwin",
-        machine=lambda: "arm64",
+        platform_name=lambda: "linux",
+        machine=lambda: "aarch64",
     )
     _, body = api.get_tools(context(tmp_path, installer))
     for entry in body["tools"]:
@@ -229,3 +253,80 @@ def test_declining_changes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     after = api.get_tools(ctx)[1]
     assert before == after
     assert fetched == []
+
+
+# --- diagnostics API ----------------------------------------------------
+
+
+def test_diagnostics_report_is_generated_locally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installer, _ = make_installer(tmp_path, monkeypatch)
+    status, body = api.get_diagnostics(context(tmp_path, installer))
+
+    assert status == 200
+    assert "Media Downloader diagnostics" in body["report"]
+    assert body["environment"]["version"]
+    assert body["filename"].startswith("media-downloader-diagnostics-")
+
+
+def test_diagnostics_report_never_contains_the_session_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from media_downloader.diagnostics import configure_file_logging
+    from media_downloader.logging_setup import get_logger
+
+    monkeypatch.setattr("media_downloader.paths.current_platform", lambda: "linux")
+    configure_file_logging({"XDG_DATA_HOME": str(tmp_path / "data")})
+    get_logger("t").info("X-MD-Token: SESSIONTOKENLEAK")
+
+    installer, _ = make_installer(tmp_path, monkeypatch)
+    _, body = api.get_diagnostics(context(tmp_path, installer))
+    assert "SESSIONTOKENLEAK" not in body["report"]
+
+
+def test_exporting_writes_a_file_the_user_can_find(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installer, _ = make_installer(tmp_path, monkeypatch)
+    ctx = context(tmp_path, installer)
+    status, body = api.export_diagnostics(ctx)
+
+    assert status == 200
+    written = ctx.download_dir / body["filename"]
+    assert written.is_file()
+    assert "Media Downloader diagnostics" in written.read_text()
+
+
+def test_open_logs_takes_no_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import inspect
+
+    called: list[bool] = []
+    monkeypatch.setattr(api, "open_log_folder", lambda: called.append(True))
+    installer, _ = make_installer(tmp_path, monkeypatch)
+
+    status, body = api.open_logs(context(tmp_path, installer))
+    assert status == 204 and body is None
+    assert called == [True]
+    assert list(inspect.signature(api.open_logs).parameters) == ["ctx"]
+
+
+def test_an_unexpected_install_failure_gets_an_error_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A user should be able to quote a code rather than describe a symptom."""
+    data = pinned_payload(tmp_path, {"deno": b"D"})
+    patch_manifest(monkeypatch, "deno", data, {"deno": "deno"})
+    installer, _ = make_installer(
+        tmp_path, monkeypatch, payload=data, fail=RuntimeError("disk exploded")
+    )
+    ctx = context(tmp_path, installer)
+
+    api.install_tool(ctx, "deno")
+    installer.wait_for_idle(timeout=5)
+
+    _, body = api.get_tools(ctx)
+    entry = next(t for t in body["tools"] if t["tool"] == "deno")
+    assert "MD-" in (entry["error"] or "")
+    # The raw internal message is not shown to the user.
+    assert "disk exploded" not in (entry["error"] or "")

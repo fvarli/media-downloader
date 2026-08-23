@@ -45,11 +45,66 @@ def test_pinned_checksums_are_lowercase_hex() -> None:
 
 @pytest.mark.parametrize(
     ("platform", "machine"),
-    [("darwin", "arm64"), ("darwin", "x86_64"), ("win32", "AMD64"), ("linux", "aarch64")],
+    [("darwin", "arm64"), ("darwin", "x86_64"), ("linux", "aarch64")],
 )
-def test_unverified_targets_are_absent_rather_than_guessed(platform: str, machine: str) -> None:
+def test_unverified_ffmpeg_targets_are_absent_rather_than_guessed(
+    platform: str, machine: str
+) -> None:
     """We have no verified source for these yet, so there must be no entry."""
     assert manifest.lookup(manifest.FFMPEG, platform, machine) is None
+
+
+def test_macos_ffmpeg_is_deliberately_unconfigured() -> None:
+    """No macOS FFmpeg provider met the trust requirements.
+
+    evermeet.cx publishes no SHA-256, and osxexperts.net serves a mutable
+    major-version URL with no configure flags, so GPL and nonfree components
+    cannot be ruled out. An absent entry is the honest state; a guessed hash
+    would not be.
+    """
+    for machine in ("arm64", "x86_64"):
+        assert manifest.lookup(manifest.FFMPEG, "darwin", machine) is None
+
+
+def test_verified_targets_are_present() -> None:
+    """The combinations whose checksums were taken from upstream."""
+    assert manifest.lookup(manifest.FFMPEG, "linux", "x86_64") is not None
+    assert manifest.lookup(manifest.FFMPEG, "win32", "AMD64") is not None
+    for platform, machine in (("linux", "x86_64"), ("darwin", "arm64"), ("win32", "AMD64")):
+        assert manifest.lookup(manifest.DENO, platform, machine) is not None
+
+
+@pytest.mark.parametrize(
+    ("tool", "platform", "expected"),
+    [
+        (manifest.FFMPEG, "win32", ("ffmpeg.exe", "ffprobe.exe")),
+        (manifest.FFMPEG, "linux", ("ffmpeg", "ffprobe")),
+        (manifest.DENO, "win32", ("deno.exe",)),
+        (manifest.DENO, "darwin", ("deno",)),
+    ],
+)
+def test_executables_carry_the_platform_suffix(
+    tool: str, platform: str, expected: tuple[str, ...]
+) -> None:
+    """A Windows binary written without .exe would not be found by which()."""
+    machine = "AMD64" if platform == "win32" else ("arm64" if platform == "darwin" else "x86_64")
+    spec = manifest.lookup(tool, platform, machine)
+    assert spec is not None
+    assert spec.executables == expected
+
+
+@pytest.mark.parametrize(
+    ("platform", "logical", "expected"),
+    [("win32", "deno", "deno.exe"), ("linux", "deno", "deno"), ("win32", "ffmpeg", "ffmpeg.exe")],
+)
+def test_executable_name_resolves_through_the_manifest(
+    platform: str, logical: str, expected: str
+) -> None:
+    machine = "AMD64" if platform == "win32" else "x86_64"
+    tool = manifest.DENO if logical == "deno" else manifest.FFMPEG
+    spec = manifest.lookup(tool, platform, machine)
+    assert spec is not None
+    assert manifest.executable_name(spec, logical) == expected
 
 
 @pytest.mark.parametrize(
