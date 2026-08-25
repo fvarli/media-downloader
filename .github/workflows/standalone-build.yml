@@ -58,6 +58,20 @@ jobs:
             exe: dist/media-downloader/media-downloader.exe
             archive: Media-Downloader-Windows-x64-windowed.zip
             extracted: package/extracted/media-downloader
+          # The same commit and the same spec, console this time. When Windows
+          # next fails silently there is something that can be run in a
+          # terminal to find out why -- which is exactly what was missing when
+          # a windowed build exited before it could write a single log line.
+          - label: Windows x64 (console diagnostic)
+            os: windows-latest
+            windowed: '0'
+            mode: console
+            target: windows
+            artifact_path: dist/media-downloader
+            exe: dist/media-downloader/media-downloader.exe
+            archive: Media-Downloader-Windows-x64-console.zip
+            extracted: package/extracted/media-downloader
+
           # Linux has no windowed/console distinction to make, and a console
           # build keeps one artifact where printed output is still checked.
           - label: Linux x86_64 (console)

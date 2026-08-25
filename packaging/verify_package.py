@@ -41,6 +41,16 @@ MUST_BE_EXECUTABLE = {
     "linux": "media-downloader",
 }
 
+#: Windows loads these before Python exists, so a missing one fails in the
+#: bootloader with "Failed to load Python DLL" and nothing we write in Python
+#: can report it. They are present today; this keeps them present.
+WINDOWS_RUNTIME_DLLS = (
+    "_internal/python312.dll",
+    "_internal/VCRUNTIME140.dll",
+    "_internal/VCRUNTIME140_1.dll",
+    "_internal/ucrtbase.dll",
+)
+
 #: What the payload's root directory should be called.
 EXPECTED_ROOT = {
     "macos": "Media Downloader.app",
@@ -148,6 +158,17 @@ def verify(archive: Path, destination: Path, platform: str) -> Path:
             name for name in ("Frameworks", "Resources") if (payload / "Contents" / name).is_dir()
         ]
         check("Contents carries the collected payload", bool(support), str(support))
+
+    if platform == "windows":
+        # Checked because a user reported "Failed to load Python DLL" -- which
+        # turned out to be an extraction that separated the .exe from
+        # _internal, not a missing file. The bundle was complete, and these
+        # assertions are what keep that true.
+        print("\nWindows runtime")
+        for relative in WINDOWS_RUNTIME_DLLS:
+            target = payload / relative
+            size = target.stat().st_size if target.is_file() else 0
+            check(f"{Path(relative).name} bundled", size > 0, f"{size} bytes")
 
     print("\nPermissions after the round trip")
     relative = MUST_BE_EXECUTABLE[platform]

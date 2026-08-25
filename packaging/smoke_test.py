@@ -30,6 +30,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -136,14 +137,29 @@ def read_log(root: Path) -> str:
 class Server:
     """One run of ``--web`` against its own app-data root."""
 
-    def __init__(self, executable: Path, root: Path, extra_env: dict[str, str] | None = None):
+    def __init__(
+        self,
+        executable: Path,
+        root: Path,
+        extra_env: dict[str, str] | None = None,
+        args: list[str] | None = None,
+    ):
         self.executable = executable
         self.root = root
         self.url = ""
+        # No console for the child on Windows, so this is as close to what
+        # Explorer does as a spawned process gets. The DEVNULL handles are
+        # still valid handles, so sys.stdout is not literally absent here --
+        # that case is covered deterministically by the offline tests.
+        creation = 0
+        if sys.platform == "win32":  # pragma: no cover - Windows only
+            creation = subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
         self.process = subprocess.Popen(
-            [str(executable), "--web"],
+            [str(executable), *(args if args is not None else ["--web"])],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            creationflags=creation,
             # Merged, not double-splatted: extra_env may legitimately
             # override one of the isolation keys.
             env=clean_env(**{**isolated(root), **(extra_env or {})}),
@@ -221,8 +237,17 @@ def check_cli(executable: Path, console: bool) -> None:
 
         code, _ = run(executable, "not-a-url", env=env)
         check("malformed URL exits 3", code == 3, f"got {code}")
-        code, _ = run(executable, env=env)
-        check("bare invocation exits 2", code == 2, f"got {code}")
+        if console:
+            # A console build keeps the command-line contract: no arguments
+            # means a usage message somebody can actually read.
+            code, _ = run(executable, env=env)
+            check("bare invocation exits 2", code == 2, f"got {code}")
+        else:
+            # A windowed build must NOT do that. A double-click passes no
+            # arguments, and exiting 2 with no console to print to is exactly
+            # how this looked like nothing happening on a real desktop. The
+            # positive case -- that it serves -- is checked in check_web.
+            print("  SKIP  bare invocation (windowed: it starts the interface, see Web UI)")
         code, _ = run(executable, "https://example.com/x", "--web", env=env)
         check("URL with --web exits 2", code == 2, f"got {code}")
 
@@ -282,8 +307,14 @@ def check_report_hygiene(report: str, token: str) -> None:
         check("report excludes the session token verbatim", token not in report)
 
 
-def check_web(executable: Path) -> None:
+def check_web(executable: Path, *, console: bool) -> None:
     print("\nWeb UI")
+    # This is the heart of the Windows regression. A windowed build is started
+    # exactly as a double-click starts it -- with no arguments at all -- rather
+    # than with an explicit --web that no user ever types. Asserting the old
+    # behaviour here is what let a completely dead artifact ship green.
+    launch_args = ["--web"] if console else []
+    print(f"  launching as: {' '.join([executable.name, *launch_args])}")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         # The self-test plants one known error so its ID can be looked for in
@@ -291,7 +322,12 @@ def check_web(executable: Path) -> None:
         # by default. No browser: a windowed build that cannot open one falls
         # back to a modal dialog, and a modal dialog on an unattended runner
         # waits for a click that never comes.
-        server = Server(executable, root, {"MD_DIAGNOSTIC_SELFTEST": "1", "MD_NO_BROWSER": "1"})
+        server = Server(
+            executable,
+            root,
+            {"MD_DIAGNOSTIC_SELFTEST": "1", "MD_NO_BROWSER": "1"},
+            args=launch_args,
+        )
         url = ""
         try:
             url = server.wait_until_listening()
@@ -353,6 +389,11 @@ def check_web(executable: Path) -> None:
         if path is not None:
             text = path.read_text(errors="replace")
             check("startup was logged", "startup version=" in text)
+            check(
+                f"the launch was recorded with {len(launch_args)} argument(s)",
+                f"args={len(launch_args)}" in text,
+                "no launch record",
+            )
             check("server bind was logged", bool(LISTENING.search(text)))
             check("exactly one bind record for this run", len(LISTENING.findall(text)) == 1)
             check("log contains no session token", "X-MD-Token" not in text)
@@ -399,7 +440,7 @@ def main() -> int:
 
     check_cli(executable, console=args.mode == "console")
     check_resources(artifact)
-    check_web(executable)
+    check_web(executable, console=args.mode == "console")
 
     print()
     if failures:
