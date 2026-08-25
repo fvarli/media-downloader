@@ -41,6 +41,20 @@ LAME_VERSION="3.100"
 LAME_URL="https://downloads.sourceforge.net/project/lame/lame/${LAME_VERSION}/lame-${LAME_VERSION}.tar.gz"
 LAME_SHA256="ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e"
 
+# H.264 *encoding*. The earlier build had none at all -- no libx264, which is
+# GPL and therefore impossible here, and no alternative -- so every universal
+# compatibility conversion would have failed on macOS. libopenh264 is Cisco's
+# BSD-2-Clause encoder, and FFmpeg's own configure keeps it out of
+# EXTERNAL_LIBRARY_GPL_LIST, so it needs no --enable-gpl. It is also what the
+# Linux and Windows managed builds already ship, which puts all three platforms
+# on the same encoder.
+#
+# Pinned by commit like FFmpeg itself: a git tag can be checked against a
+# content hash, whereas GitHub's generated tarballs have been re-rolled before.
+OPENH264_TAG="v2.6.0"
+OPENH264_COMMIT="652bdb7719f30b52b08e506645a7322ff1b2cc6f"
+OPENH264_REPO="https://github.com/cisco/openh264.git"
+
 # arm64 macOS starts at 11.0, so nothing older can run this anyway.
 export MACOSX_DEPLOYMENT_TARGET=11.0
 
@@ -120,6 +134,45 @@ tar -xzf "$WORK/lame.tar.gz" -C "$WORK"
   quietly lame-install make install
 )
 
+# -- openh264 -----------------------------------------------------------
+#
+# STATIC_LDFLAGS is overridden because openh264's Makefile hard-codes
+# -lstdc++, and that string is baked into the openh264.pc that FFmpeg reads
+# with --pkg-config-flags=--static. libstdc++ does not exist on Apple Silicon,
+# so FFmpeg's link would fail on a flag openh264 chose for us. macOS uses
+# libc++, which the project's own darwin rules already compile against.
+
+say "openh264 $OPENH264_TAG"
+git clone --quiet --depth 1 --branch "$OPENH264_TAG" "$OPENH264_REPO" "$WORK/openh264"
+ACTUAL_OPENH264="$(git -C "$WORK/openh264" rev-parse HEAD)"
+if [ "$ACTUAL_OPENH264" != "$OPENH264_COMMIT" ]; then
+  echo "openh264 tag $OPENH264_TAG does not point at the pinned commit" >&2
+  echo "  expected $OPENH264_COMMIT" >&2
+  echo "  got      $ACTUAL_OPENH264" >&2
+  exit 1
+fi
+echo "  commit $ACTUAL_OPENH264 verified"
+(
+  cd "$WORK/openh264"
+  quietly openh264-make make -j"$JOBS" PREFIX="$DEPS" STATIC_LDFLAGS=-lc++
+  quietly openh264-install make PREFIX="$DEPS" STATIC_LDFLAGS=-lc++ install-static
+)
+
+# Assert it rather than assume it: a wrong flag here surfaces much later, as an
+# FFmpeg link error with no obvious cause.
+OPENH264_PC="$DEPS/lib/pkgconfig/openh264.pc"
+if [ ! -f "$OPENH264_PC" ]; then
+  echo "  openh264.pc was not installed; FFmpeg would not find the library" >&2
+  exit 1
+fi
+if grep -q -- "-lstdc++" "$OPENH264_PC"; then
+  echo "  REFUSING TO CONTINUE: openh264.pc still asks for -lstdc++," >&2
+  echo "  which does not exist on Apple Silicon." >&2
+  grep -n "Libs" "$OPENH264_PC" >&2
+  exit 1
+fi
+echo "  openh264.pc installed, and free of -lstdc++"
+
 # -- FFmpeg -------------------------------------------------------------
 
 say "FFmpeg $FFMPEG_TAG"
@@ -158,6 +211,7 @@ export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
     --pkg-config-flags="--static" \
     --enable-libmp3lame \
     --enable-libopus \
+    --enable-libopenh264 \
     --enable-zlib \
     --enable-securetransport \
     --disable-shared \
@@ -188,11 +242,11 @@ for forbidden in --enable-gpl --enable-nonfree; do
     echo "  absent:  $forbidden"
   fi
 done
-for required in --enable-libmp3lame --enable-libopus; do
+for required in --enable-libmp3lame --enable-libopus --enable-libopenh264; do
   if grep -q -- "$required" <<<"$BUILDCONF"; then
     echo "  present: $required"
   else
-    echo "  MISSING: $required -- two audio formats would silently break" >&2
+    echo "  MISSING: $required -- an advertised capability would silently break" >&2
     fail=1
   fi
 done
@@ -228,6 +282,27 @@ for pair in "mp3:libmp3lame" "opus:libopus" "m4a:aac" "flac:flac" "wav:pcm_s16le
   [ -s "$SMOKE/out.$ext" ] || { echo "  $ext produced nothing" >&2; exit 1; }
   echo "  $ext via $enc  OK"
 done
+
+# The capability this rebuild exists for: without an H.264 encoder every
+# universal compatibility conversion fails, which is exactly what the previous
+# build would have done. Decoding VP9 is native, so the pair below is the whole
+# production path a macOS user takes.
+# mpeg4 rather than VP9 as the source here only because this build has no VP9
+# *encoder* and needs none: decoding VP9 is native. The real VP9 input is fed
+# to this binary in the standalone workflow, from a fixture Linux builds.
+"$FFMPEG_BIN" -v error -y -f lavfi -i "testsrc=size=160x120:rate=10:duration=1" \
+  -c:v mpeg4 -pix_fmt yuv420p -an "$SMOKE/source.mp4"
+"$FFMPEG_BIN" -v error -y -i "$SMOKE/source.mp4" -c:v libopenh264 -b:v 1M \
+  -pix_fmt yuv420p -movflags +faststart "$SMOKE/h264.mp4"
+H264_CODEC="$("$FFPROBE_BIN" -v error -select_streams v:0 -show_entries stream=codec_name \
+  -of csv=p=0 "$SMOKE/h264.mp4")"
+H264_PIXFMT="$("$FFPROBE_BIN" -v error -select_streams v:0 -show_entries stream=pix_fmt \
+  -of csv=p=0 "$SMOKE/h264.mp4")"
+if [ "$H264_CODEC" != "h264" ] || [ "$H264_PIXFMT" != "yuv420p" ]; then
+  echo "  h264 encode produced $H264_CODEC/$H264_PIXFMT, expected h264/yuv420p" >&2
+  exit 1
+fi
+echo "  h264 via libopenh264  OK"
 
 "$FFMPEG_BIN" -v error -y -f lavfi -i "testsrc=size=160x120:duration=1" \
   -pix_fmt yuv420p -an "$SMOKE/v.mp4"
@@ -269,6 +344,7 @@ cat >"$OUT_DIR/ffmpeg-build-info.json" <<JSON
   "deployment_target": "$MACOSX_DEPLOYMENT_TARGET",
   "ffmpeg": {"tag": "$FFMPEG_TAG", "commit": "$ACTUAL_COMMIT"},
   "libopus": {"version": "$OPUS_VERSION", "sha256": "$OPUS_SHA256"},
+  "libopenh264": {"tag": "$OPENH264_TAG", "commit": "$ACTUAL_OPENH264", "licence": "BSD-2-Clause"},
   "lame": {"version": "$LAME_VERSION", "sha256": "$LAME_SHA256"},
   "ffmpeg_version": "$("$FFMPEG_BIN" -hide_banner -version | head -1)",
   "configuration": $(printf '%s' "$BUILDCONF" | tail -n +2 | tr '\n' ' ' | sed 's/  */ /g;s/^ //;s/ $//' | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')

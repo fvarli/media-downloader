@@ -39,6 +39,7 @@ LGPL_BUILDCONF = """configuration:
   --disable-autodetect
   --enable-libmp3lame
   --enable-libopus
+  --enable-libopenh264
   --enable-zlib
   --disable-shared
 """
@@ -56,7 +57,9 @@ def test_a_gpl_or_nonfree_build_is_rejected(flag: str) -> None:
     assert not all(verdict.values())
 
 
-@pytest.mark.parametrize("missing", ["--enable-libmp3lame", "--enable-libopus"])
+@pytest.mark.parametrize(
+    "missing", ["--enable-libmp3lame", "--enable-libopus", "--enable-libopenh264"]
+)
 def test_a_build_missing_an_encoder_is_rejected(missing: str) -> None:
     """FFmpeg has no native MP3 encoder and is never asked for its native Opus
     one, so losing either library silently breaks a format the interface
@@ -270,3 +273,27 @@ def test_reporting_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(buildmode_module, "is_windowed_app", explode)
     monkeypatch.setattr(entry.sys, "argv", ["media-downloader"])
     entry._report_invisible_failure(RuntimeError("original"), 1)  # must not raise
+
+
+def test_a_build_with_no_h264_encoder_is_rejected() -> None:
+    """The exact shape of the first macOS build.
+
+    It had no H.264 encoder at all -- libx264 is GPL and impossible under our
+    licensing, and nothing was put in its place -- so every universal
+    compatibility conversion on macOS would have failed on the encoder. It
+    passed every gate that existed at the time, because none of them asked.
+    """
+    without = LGPL_BUILDCONF.replace("  --enable-libopenh264\n", "")
+    verdict = verify_archive.licensing_verdict(without)
+    assert verdict["--enable-libopenh264"] is False
+    assert not all(verdict.values())
+
+
+def test_the_gpl_encoder_is_never_an_acceptable_substitute() -> None:
+    """libx264 would satisfy "has an H.264 encoder" and break the licence."""
+    with_x264 = LGPL_BUILDCONF.replace(
+        "  --enable-libopenh264\n", "  --enable-libx264\n  --enable-gpl\n"
+    )
+    verdict = verify_archive.licensing_verdict(with_x264)
+    assert verdict["--enable-gpl"] is False
+    assert verdict["--enable-libopenh264"] is False

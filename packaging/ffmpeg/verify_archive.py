@@ -30,6 +30,10 @@ from types import MappingProxyType
 #: divergence worth catching before anything is pinned.
 MEMBERS = MappingProxyType({"ffmpeg": "bin/ffmpeg", "ffprobe": "bin/ffprobe"})
 
+#: The encoder universal compatibility depends on. An earlier build had no
+#: H.264 encoder at all, which would have failed every conversion on macOS.
+VIDEO_ENCODER = "libopenh264"
+
 #: Every audio format the interface offers, with the encoder yt-dlp names for
 #: it. FFmpeg has no native MP3 encoder and never asks for the native Opus one,
 #: so a build without libmp3lame and libopus silently loses two of these.
@@ -44,7 +48,7 @@ ENCODERS = {
 #: Licences that would make the binary undistributable under our terms, and
 #: the libraries without which two advertised formats silently break.
 FORBIDDEN = ("--enable-gpl", "--enable-nonfree")
-REQUIRED = ("--enable-libmp3lame", "--enable-libopus")
+REQUIRED = ("--enable-libmp3lame", "--enable-libopus", "--enable-libopenh264")
 
 failures: list[str] = []
 
@@ -162,6 +166,57 @@ def check_encoders(ffmpeg: Path, ffprobe: Path, work: Path) -> None:
                 str(out),
             )
             check(f"{extension} decodes back", bool(probe.stdout.strip()), probe.stderr[-200:])
+
+
+def check_h264(ffmpeg: Path, ffprobe: Path, work: Path) -> None:
+    """The universal target's video half, against this exact binary."""
+    print("\nH.264 encoding")
+    source = work / "source.mp4"
+    run(
+        str(ffmpeg),
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=size=160x120:rate=10:duration=1",
+        "-c:v",
+        "mpeg4",
+        "-pix_fmt",
+        "yuv420p",
+        "-an",
+        str(source),
+    )
+    out = work / "h264.mp4"
+    result = run(
+        str(ffmpeg),
+        "-y",
+        "-i",
+        str(source),
+        "-c:v",
+        VIDEO_ENCODER,
+        "-b:v",
+        "1M",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        str(out),
+    )
+    check(f"{VIDEO_ENCODER} produced a file", out.is_file(), result.stderr.strip()[-200:])
+    if out.is_file():
+        probe = run(
+            str(ffprobe),
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_name,pix_fmt",
+            "-of",
+            "csv=p=0",
+            str(out),
+        )
+        check("it is h264 in yuv420p", probe.stdout.strip() == "h264,yuv420p", probe.stdout.strip())
 
 
 def check_merge(installed: Path, work: Path) -> None:
@@ -320,6 +375,7 @@ def main() -> int:
         if not failures:
             check_licensing(installed / "ffmpeg")
             check_encoders(installed / "ffmpeg", installed / "ffprobe", work)
+            check_h264(installed / "ffmpeg", installed / "ffprobe", work)
             check_merge(installed, work)
             check_portability(installed / "ffmpeg")
 
