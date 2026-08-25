@@ -18,12 +18,17 @@ file, which is exactly the mistake that let an MP4 full of VP9 through.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from typing import Any
 
 from media_downloader.compatibility import (
+    H264_ENCODERS,
     MediaProbe,
+    StreamAction,
+    choose_video_encoder,
     ffmpeg_output_arguments,
+    parse_available_encoders,
     plan_for,
     validate_universal,
 )
@@ -34,6 +39,10 @@ logger = get_logger("compatibility")
 #: Suffix for the in-progress conversion. It sits beside the target so the
 #: promotion below is a rename within one filesystem rather than a copy.
 TEMP_SUFFIX = ".compat-tmp.mp4"
+
+#: Listing encoders is a local, instant operation; the bound is only there so a
+#: wedged binary cannot hang a download.
+ENCODER_QUERY_TIMEOUT = 60
 
 
 def make_universal_postprocessor() -> Any:
@@ -71,6 +80,19 @@ def make_universal_postprocessor() -> Any:
                 plan.action,
             )
 
+            # Which H.264 encoder exists depends on how this FFmpeg was
+            # licensed: libx264 is GPL, so the LGPL build this application
+            # installs for its own users ships Cisco's libopenh264 instead.
+            # Assuming libx264 would fail for exactly those users.
+            encoder = self._video_encoder() if plan.video is StreamAction.TRANSCODE else ""
+            if plan.video is StreamAction.TRANSCODE:
+                if not encoder:
+                    raise PostProcessingError(
+                        "This FFmpeg has no H.264 encoder, so the file cannot be made "
+                        "universally playable."
+                    )
+                logger.info("compatibility encoder=%s", encoder)
+
             # Even an all-copy plan is remuxed: it costs no quality, and it is
             # the only way to be sure the container is MP4 with faststart.
             target = source_path.with_suffix(".mp4")
@@ -79,7 +101,16 @@ def make_universal_postprocessor() -> Any:
             try:
                 self.real_run_ffmpeg(
                     [(str(source_path), [])],
-                    [(str(temporary), ffmpeg_output_arguments(plan))],
+                    [
+                        (
+                            str(temporary),
+                            ffmpeg_output_arguments(
+                                plan,
+                                video_encoder=encoder or H264_ENCODERS[0],
+                                source_bitrate=probe.video_bitrate,
+                            ),
+                        )
+                    ],
                 )
                 verdict = self._accept(temporary)
             except Exception:
@@ -98,6 +129,20 @@ def make_universal_postprocessor() -> Any:
             # changed the extension; otherwise it has already been replaced.
             leftovers = [str(source_path)] if target != source_path else []
             return leftovers, info
+
+        def _video_encoder(self) -> str:
+            """Ask this FFmpeg which H.264 encoders it actually has."""
+            try:
+                listing = subprocess.run(
+                    [self.executable, "-hide_banner", "-encoders"],
+                    capture_output=True,
+                    text=True,
+                    timeout=ENCODER_QUERY_TIMEOUT,
+                ).stdout
+            except (OSError, subprocess.SubprocessError):
+                logger.debug("Could not list encoders; assuming the usual one.")
+                return H264_ENCODERS[0]
+            return choose_video_encoder(parse_available_encoders(listing)) or ""
 
         def _accept(self, produced: Path) -> Any:
             """Judge what FFmpeg actually produced, not that it exited zero."""

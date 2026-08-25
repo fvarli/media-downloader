@@ -37,13 +37,32 @@ MP4_FORMAT_NAMES = frozenset({"mov", "mp4", "m4a", "3gp", "3g2", "mj2"})
 #: either refuse or fall back on.
 AAC_LC_PROFILE = "LC"
 
-#: Encoder settings. CRF 20 at preset medium is the quality/time balance for a
-#: CPU encode that may have to handle 4K: visually high quality without an
-#: encode that runs for hours. No scaling and no frame-rate conversion -- the
-#: source resolution, aspect ratio and frame rate are preserved.
-VIDEO_ENCODER = "libx264"
+#: H.264 encoders in preference order.
+#:
+#: libx264 is the better encoder and the obvious first choice -- but it is GPL,
+#: so an LGPL FFmpeg build cannot contain it, and the build this application
+#: installs for its own users is LGPL precisely so it can be redistributed.
+#: That build ships Cisco's BSD-licensed libopenh264 instead. Hard-coding
+#: libx264 would therefore have failed for every user who took the managed
+#: install, which is the primary route on Windows. Hardware encoders are
+#: deliberately absent: they are not portable or deterministic.
+H264_ENCODERS: tuple[str, ...] = ("libx264", "libopenh264")
+
+#: CRF 20 at preset medium is the quality/time balance for a CPU encode that
+#: may have to handle 4K: visually high quality without an encode that runs for
+#: hours. libopenh264 supports neither option and is driven by bitrate instead.
 VIDEO_CRF = "20"
 VIDEO_PRESET = "medium"
+
+#: H.264 needs more bits than VP9 or AV1 for the same picture, so a straight
+#: copy of the source bitrate would lose quality visibly. Doubling it, inside a
+#: sane band, keeps the result close to the source without producing absurd
+#: files. Only used for encoders that cannot be given a quality target.
+BITRATE_MULTIPLIER = 2
+MIN_VIDEO_BITRATE = 1_000_000
+MAX_VIDEO_BITRATE = 24_000_000
+FALLBACK_VIDEO_BITRATE = 6_000_000
+
 AUDIO_ENCODER = "aac"
 AUDIO_BITRATE = "192k"
 
@@ -72,6 +91,9 @@ class MediaProbe:
     container: tuple[str, ...]
     video: StreamInfo | None
     audio: StreamInfo | None
+    #: Bits per second, when ffprobe reports one. Used only to aim an encoder
+    #: that takes no quality target.
+    video_bitrate: int | None = None
 
     @classmethod
     def from_ffprobe(cls, data: Mapping[str, Any]) -> MediaProbe:
@@ -98,13 +120,35 @@ class MediaProbe:
                     profile=_text(stream.get("profile")),
                 )
 
-        raw_format = str((data.get("format") or {}).get("format_name") or "")
+        container_data = data.get("format") or {}
+        raw_format = str(container_data.get("format_name") or "")
         container = tuple(part.strip() for part in raw_format.split(",") if part.strip())
-        return cls(container=container, video=video, audio=audio)
+
+        # The video stream's own rate where ffprobe reports one, else the
+        # container's. Absent for plenty of files, hence optional.
+        bitrate = next(
+            (
+                _integer(stream.get("bit_rate"))
+                for stream in streams
+                if stream.get("codec_type") == "video"
+            ),
+            None,
+        )
+        if bitrate is None:
+            bitrate = _integer(container_data.get("bit_rate"))
+
+        return cls(container=container, video=video, audio=audio, video_bitrate=bitrate)
 
     @property
     def is_mp4(self) -> bool:
         return bool(MP4_FORMAT_NAMES.intersection(self.container))
+
+
+def _integer(value: Any) -> int | None:
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def _text(value: Any) -> str | None:
@@ -223,7 +267,48 @@ def plan_for(probe: MediaProbe) -> CompatibilityPlan:
     )
 
 
-def ffmpeg_output_arguments(plan: CompatibilityPlan) -> list[str]:
+def parse_available_encoders(listing: str) -> frozenset[str]:
+    """The encoder names in ``ffmpeg -encoders`` output.
+
+    A narrow, tested reading of one well-defined listing rather than open-ended
+    scraping: each entry is a six-character flags column followed by the name.
+    It exists because which H.264 encoder is present depends on how FFmpeg was
+    licensed, and only the binary can answer that.
+    """
+    found: set[str] = set()
+    for line in listing.splitlines():
+        parts = line.split()
+        if len(parts) < 2 or len(parts[0]) != 6 or parts[0][0] not in "VAS":
+            continue
+        name = parts[1]
+        # The legend line reads " V..... = Video", which otherwise contributes
+        # "=" as though it were an encoder.
+        if name.replace("_", "").replace("-", "").isalnum():
+            found.add(name)
+    return frozenset(found)
+
+
+def choose_video_encoder(available: frozenset[str]) -> str | None:
+    """The best H.264 encoder this FFmpeg actually has, if any."""
+    for name in H264_ENCODERS:
+        if name in available:
+            return name
+    return None
+
+
+def target_video_bitrate(source_bitrate: int | None) -> int:
+    """What to aim an encoder that accepts no quality target."""
+    if source_bitrate is None or source_bitrate <= 0:
+        return FALLBACK_VIDEO_BITRATE
+    return max(MIN_VIDEO_BITRATE, min(source_bitrate * BITRATE_MULTIPLIER, MAX_VIDEO_BITRATE))
+
+
+def ffmpeg_output_arguments(
+    plan: CompatibilityPlan,
+    *,
+    video_encoder: str = H264_ENCODERS[0],
+    source_bitrate: int | None = None,
+) -> list[str]:
     """The output side of the FFmpeg call for ``plan``.
 
     An argument list, never a command string, so nothing is exposed to a shell.
@@ -234,16 +319,15 @@ def ffmpeg_output_arguments(plan: CompatibilityPlan) -> list[str]:
     args: list[str] = []
 
     if plan.video is StreamAction.TRANSCODE:
-        args += [
-            "-c:v",
-            VIDEO_ENCODER,
-            "-crf",
-            VIDEO_CRF,
-            "-preset",
-            VIDEO_PRESET,
-            "-pix_fmt",
-            UNIVERSAL_PIX_FMT,
-        ]
+        args += ["-c:v", video_encoder]
+        if video_encoder == "libx264":
+            # A quality target beats a bitrate: the encoder decides how many
+            # bits each scene deserves.
+            args += ["-crf", VIDEO_CRF, "-preset", VIDEO_PRESET]
+        else:
+            # libopenh264 understands neither -crf nor -preset.
+            args += ["-b:v", str(target_video_bitrate(source_bitrate))]
+        args += ["-pix_fmt", UNIVERSAL_PIX_FMT]
     elif plan.video is StreamAction.COPY:
         args += ["-c:v", "copy"]
 

@@ -15,7 +15,7 @@ import pytest
 
 from media_downloader.compatibility import (
     AUDIO_ENCODER,
-    VIDEO_ENCODER,
+    H264_ENCODERS,
     CompatibilityPlan,
     MediaProbe,
     StreamAction,
@@ -94,7 +94,7 @@ def test_an_already_compatible_file_is_never_re_encoded() -> None:
     args = ffmpeg_output_arguments(plan)
     assert "-c:v" in args and args[args.index("-c:v") + 1] == "copy"
     assert "-c:a" in args and args[args.index("-c:a") + 1] == "copy"
-    assert VIDEO_ENCODER not in args
+    assert not any(name in args for name in H264_ENCODERS)
 
 
 def test_a_compatible_file_is_still_remuxed_for_faststart() -> None:
@@ -125,7 +125,7 @@ def test_incompatible_audio_alone_never_re_encodes_the_video(
     args = ffmpeg_output_arguments(plan)
     assert args[args.index("-c:v") + 1] == "copy"
     assert args[args.index("-c:a") + 1] == AUDIO_ENCODER
-    assert VIDEO_ENCODER not in args
+    assert not any(name in args for name in H264_ENCODERS)
 
 
 # -- CASE C/D: incompatible video ----------------------------------------
@@ -137,7 +137,7 @@ def test_video_outside_the_target_is_converted_to_h264(codec: str) -> None:
 
     assert plan.video is StreamAction.TRANSCODE
     args = ffmpeg_output_arguments(plan)
-    assert args[args.index("-c:v") + 1] == VIDEO_ENCODER
+    assert args[args.index("-c:v") + 1] in H264_ENCODERS
     assert args[args.index("-pix_fmt") + 1] == "yuv420p"
 
 
@@ -253,3 +253,123 @@ def test_a_plan_reports_whether_any_encoding_is_needed() -> None:
     assert plan_for(probe_of()).transcodes_anything is False
     assert plan_for(probe_of(video="vp9")).transcodes_anything is True
     assert isinstance(plan_for(probe_of()), CompatibilityPlan)
+
+
+# -- which H.264 encoder exists depends on the licence -------------------
+#
+# libx264 is GPL, so the LGPL FFmpeg this application installs for its own
+# users cannot contain it -- that build ships Cisco's libopenh264 instead.
+# Hard-coding libx264 failed in CI for exactly those users, which is how this
+# was found.
+
+SYSTEM_ENCODERS = """Encoders:
+ V..... = Video
+ ------
+ V....D libx264              libx264 H.264 / AVC
+ V....D libx265              libx265 H.265 / HEVC
+ A....D aac                  AAC (Advanced Audio Coding)
+ A....D libmp3lame           libmp3lame MP3
+"""
+
+LGPL_ENCODERS = """Encoders:
+ V..... = Video
+ ------
+ V....D libopenh264          OpenH264 H.264 / AVC
+ V....D h264_nvenc           NVIDIA NVENC H.264 encoder
+ A....D aac                  AAC (Advanced Audio Coding)
+"""
+
+
+def test_the_gpl_build_offers_the_better_encoder() -> None:
+    from media_downloader.compatibility import choose_video_encoder, parse_available_encoders
+
+    assert choose_video_encoder(parse_available_encoders(SYSTEM_ENCODERS)) == "libx264"
+
+
+def test_the_lgpl_build_falls_back_to_openh264() -> None:
+    """The build users actually get through the managed install."""
+    from media_downloader.compatibility import choose_video_encoder, parse_available_encoders
+
+    available = parse_available_encoders(LGPL_ENCODERS)
+    assert "libx264" not in available
+    assert choose_video_encoder(available) == "libopenh264"
+
+
+def test_hardware_encoders_are_never_chosen() -> None:
+    """They are neither portable nor deterministic, and h264_nvenc sitting in
+    the listing must not be mistaken for something we can rely on."""
+    from media_downloader.compatibility import choose_video_encoder, parse_available_encoders
+
+    assert choose_video_encoder(parse_available_encoders(LGPL_ENCODERS)) != "h264_nvenc"
+
+
+def test_an_ffmpeg_with_no_h264_encoder_is_recognised() -> None:
+    from media_downloader.compatibility import choose_video_encoder, parse_available_encoders
+
+    listing = " V....D libvpx-vp9           libvpx VP9\n A....D aac                  AAC\n"
+    assert choose_video_encoder(parse_available_encoders(listing)) is None
+
+
+def test_the_listing_header_is_not_read_as_an_encoder() -> None:
+    from media_downloader.compatibility import parse_available_encoders
+
+    found = parse_available_encoders(SYSTEM_ENCODERS)
+    assert "=" not in found
+    assert "Encoders:" not in found
+    assert found == {"libx264", "libx265", "aac", "libmp3lame"}
+
+
+def test_a_quality_target_is_used_where_the_encoder_supports_one() -> None:
+    args = ffmpeg_output_arguments(plan_for(probe_of(video="vp9")), video_encoder="libx264")
+    assert "-crf" in args and "-preset" in args
+    assert "-b:v" not in args
+
+
+def test_a_bitrate_is_used_where_the_encoder_supports_no_quality_target() -> None:
+    """libopenh264 understands neither -crf nor -preset; passing them would be
+    silently ignored and the result unaimed."""
+    args = ffmpeg_output_arguments(
+        plan_for(probe_of(video="vp9")), video_encoder="libopenh264", source_bitrate=2_000_000
+    )
+    assert "-crf" not in args and "-preset" not in args
+    assert args[args.index("-b:v") + 1] == "4000000"
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (None, 6_000_000),
+        (0, 6_000_000),
+        (100_000, 1_000_000),
+        (2_000_000, 4_000_000),
+        (50_000_000, 24_000_000),
+    ],
+)
+def test_the_bitrate_is_scaled_and_bounded(source: int | None, expected: int) -> None:
+    """H.264 needs more bits than VP9 or AV1 for the same picture, so copying
+    the source rate would lose quality visibly -- but not without a ceiling."""
+    from media_downloader.compatibility import target_video_bitrate
+
+    assert target_video_bitrate(source) == expected
+
+
+def test_the_source_bitrate_is_read_from_the_probe() -> None:
+    probe = MediaProbe.from_ffprobe(
+        {
+            "streams": [
+                {"codec_type": "video", "codec_name": "vp9", "bit_rate": "3000000"},
+            ],
+            "format": {"format_name": MP4_FORMAT, "bit_rate": "9999"},
+        }
+    )
+    assert probe.video_bitrate == 3_000_000
+
+
+def test_the_container_bitrate_is_used_when_the_stream_has_none() -> None:
+    probe = MediaProbe.from_ffprobe(
+        {
+            "streams": [{"codec_type": "video", "codec_name": "vp9"}],
+            "format": {"format_name": MP4_FORMAT, "bit_rate": "1500000"},
+        }
+    )
+    assert probe.video_bitrate == 1_500_000

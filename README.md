@@ -421,6 +421,11 @@ Conversion happens after the download and can take longer than the download itse
 high resolutions. It requires FFmpeg: without `ffprobe` there is no way to verify what was
 produced, so the mode refuses to run rather than claim a compatibility it cannot check.
 
+Which H.264 encoder is used depends on the FFmpeg you have. `libx264` is preferred, but it is
+GPL-licensed and therefore absent from LGPL builds — including the one this project installs for
+you — so those use Cisco's BSD-licensed `libopenh264` instead. Both produce H.264 that plays
+natively; `libx264` reaches a given quality in fewer bits.
+
 **Original** — `--compatibility original`, the command-line default.
 
 Today's behaviour, unchanged: the source codecs are kept, which is what you want when archiving at
