@@ -299,3 +299,81 @@ def test_a_ydl_without_postprocessor_support_still_downloads(
     final = tmp_path / "v.mp4"
     downloader, _ = make_downloader(ffmpeg_present, info=SAMPLE_INFO, post_hook_path=str(final))
     assert downloader.download(request_factory(filename_template=None)).path == final.resolve()
+
+
+# -- playback compatibility ----------------------------------------------
+
+
+def _registered(request: Any) -> list[str]:
+    """Which postprocessors a download would attach, without downloading."""
+    attached: list[str] = []
+
+    class Recording:
+        def add_post_processor(self, pp: Any, when: str = "post_process") -> None:
+            attached.append(f"{type(pp).__name__}@{when}")
+
+        def extract_info(self, url: str, download: bool = True) -> dict[str, Any]:
+            return {
+                "id": "x",
+                "title": "T",
+                "ext": "mp4",
+                "filepath": "/tmp/x.mp4",
+                "extractor_key": "Test",
+                "webpage_url": "https://x.com/a/status/1",
+            }
+
+        def close(self) -> None:
+            return None
+
+    downloader = Downloader(
+        FFmpegStatus(Path("ffmpeg"), Path("ffprobe")), ydl_factory=lambda opts: Recording()
+    )
+    downloader.download(request)
+    return attached
+
+
+def _req(tmp_path: Path, **kwargs: Any) -> Any:
+    from media_downloader.config import build_request
+
+    return build_request(url="https://x.com/a/status/1", output=str(tmp_path), **kwargs)
+
+
+def test_universal_attaches_the_normaliser_after_the_download(tmp_path: Path) -> None:
+    from media_downloader.config import CompatibilityMode
+
+    attached = _registered(_req(tmp_path, compatibility=CompatibilityMode.UNIVERSAL))
+    assert any("UniversalCompatibilityPP@post_process" in entry for entry in attached), attached
+
+
+def test_original_attaches_no_normaliser(tmp_path: Path) -> None:
+    from media_downloader.config import CompatibilityMode
+
+    attached = _registered(_req(tmp_path, compatibility=CompatibilityMode.ORIGINAL))
+    assert not any("UniversalCompatibility" in entry for entry in attached)
+
+
+def test_audio_downloads_never_get_the_video_normaliser(tmp_path: Path) -> None:
+    from media_downloader.config import CompatibilityMode
+
+    attached = _registered(
+        _req(tmp_path, audio_only=True, compatibility=CompatibilityMode.UNIVERSAL)
+    )
+    assert not any("UniversalCompatibility" in entry for entry in attached)
+
+
+def test_automatic_naming_still_applies_alongside_normalisation(tmp_path: Path) -> None:
+    """The v0.1.1 clean-filename behaviour must survive the new phase."""
+    from media_downloader.config import CompatibilityMode
+
+    attached = _registered(_req(tmp_path, compatibility=CompatibilityMode.UNIVERSAL))
+    assert any("AutoNamePP@pre_process" in entry for entry in attached), attached
+
+
+def test_a_user_supplied_filename_still_suppresses_automatic_naming(tmp_path: Path) -> None:
+    from media_downloader.config import CompatibilityMode
+
+    attached = _registered(
+        _req(tmp_path, filename="mine.%(ext)s", compatibility=CompatibilityMode.UNIVERSAL)
+    )
+    assert not any("AutoName" in entry for entry in attached)
+    assert any("UniversalCompatibility" in entry for entry in attached)

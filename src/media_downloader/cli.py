@@ -12,10 +12,13 @@ from media_downloader import __version__
 from media_downloader.buildmode import is_windowed_app
 from media_downloader.config import (
     AUDIO_FORMAT_CHOICES,
+    COMPATIBILITY_CHOICES,
+    DEFAULT_CLI_COMPATIBILITY,
     ENV_FFMPEG_LOCATION,
     ENV_OUTPUT_DIR,
     LOSSLESS_AUDIO_FORMAT,
     QUALITY_CHOICES,
+    CompatibilityMode,
     build_request,
     default_output_dir,
 )
@@ -89,6 +92,18 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Audio codec for --audio (default: best, which keeps the original "
             "stream without re-encoding). Any other value requires FFmpeg."
+        ),
+    )
+    parser.add_argument(
+        "--compatibility",
+        choices=COMPATIBILITY_CHOICES,
+        default=DEFAULT_CLI_COMPATIBILITY.value,
+        help=(
+            "Playback compatibility for video downloads. 'original' (the "
+            "default, unchanged behaviour) keeps the source codecs. 'universal' "
+            "normalises the result to H.264 + AAC in MP4 for broad native "
+            "playback on iPhone, Mac, Windows and Android, converting only what "
+            "is incompatible; it requires FFmpeg."
         ),
     )
     parser.add_argument(
@@ -256,6 +271,7 @@ def run(argv: Sequence[str] | None = None) -> int:
             quality=args.quality,
             audio_only=args.audio,
             audio_format=args.audio_format,
+            compatibility=CompatibilityMode(args.compatibility),
             filename=args.filename,
             ffmpeg_location=args.ffmpeg_location,
             info_only=args.info,

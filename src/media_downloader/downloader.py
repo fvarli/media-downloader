@@ -27,6 +27,7 @@ from media_downloader.ffmpeg import FFmpegStatus
 from media_downloader.jsruntime import JSRuntimeStatus
 from media_downloader.logging_setup import get_logger
 from media_downloader.naming import AUTO_NAME_FIELD, build_auto_filename_stem, ensure_output_dir
+from media_downloader.normalize import register_universal_compatibility
 from media_downloader.options import build_info_opts, build_ydl_opts
 
 logger = get_logger("downloader")
@@ -292,7 +293,14 @@ class Downloader:
 
         # Only automatic names are cleaned: a user-supplied --filename template
         # is theirs, and is never rewritten beyond the safety validation.
-        setup = None if request.filename_template else _register_auto_naming
+        # Normalisation is separate and runs after the download, so both can
+        # apply to the same job.
+        def setup(ydl: YoutubeDLLike) -> None:
+            if not request.filename_template:
+                _register_auto_naming(ydl)
+            if request.needs_universal_video:
+                register_universal_compatibility(ydl)
+
         info = self._extract(opts, request.url, download=True, setup=setup)
         path = self._resolve_final_path(info, final_paths, request)
         return DownloadResult(path=path, info=MediaInfo.from_info_dict(info))

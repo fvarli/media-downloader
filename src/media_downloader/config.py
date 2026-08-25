@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 
 from media_downloader.naming import (
@@ -34,6 +35,32 @@ AUDIO_FORMAT_CHOICES: tuple[str, ...] = ("best", "mp3", "m4a", "opus", "flac", "
 LOSSLESS_AUDIO_FORMAT = "best"
 
 
+class CompatibilityMode(str, Enum):
+    """What the finished video file is expected to play on.
+
+    A real download produced an MP4 holding VP9 and HE-AAC. It played on Linux
+    and an iPhone would not play it normally, because ".mp4" describes the
+    container and says nothing about the codecs inside it.
+
+    UNIVERSAL normalises the output to H.264 + AAC-LC in MP4 and then checks
+    it, so the promise is verified rather than assumed. ORIGINAL keeps the
+    source codecs, which is what someone archiving at maximum quality wants,
+    and makes no claim about native playback.
+    """
+
+    UNIVERSAL = "universal"
+    ORIGINAL = "original"
+
+
+COMPATIBILITY_CHOICES: tuple[str, ...] = tuple(mode.value for mode in CompatibilityMode)
+
+#: The command line keeps today's behaviour, so no existing script changes
+#: meaning. The packaged application defaults to the mode that plays anywhere,
+#: because that is what somebody double-clicking an application wants.
+DEFAULT_CLI_COMPATIBILITY = CompatibilityMode.ORIGINAL
+DEFAULT_APP_COMPATIBILITY = CompatibilityMode.UNIVERSAL
+
+
 @dataclass(frozen=True)
 class DownloadRequest:
     """A fully resolved description of one download.
@@ -48,6 +75,7 @@ class DownloadRequest:
     quality: str = "best"
     audio_only: bool = False
     audio_format: str = LOSSLESS_AUDIO_FORMAT
+    compatibility: CompatibilityMode = DEFAULT_CLI_COMPATIBILITY
     # None means the user gave no --filename, so the automatic naming policy
     # in media_downloader.naming applies. A string is the user's own template
     # and is never rewritten beyond the existing safety validation.
@@ -56,6 +84,16 @@ class DownloadRequest:
     info_only: bool = False
     overwrite: bool = False
     extra_ydl_opts: Mapping[str, object] = field(default_factory=dict)
+
+    @property
+    def needs_universal_video(self) -> bool:
+        """True when this download must end up natively playable.
+
+        Audio-only downloads are excluded on purpose: they have their own
+        format handling, and forcing video compatibility logic onto them would
+        change behaviour nobody asked to change.
+        """
+        return not self.audio_only and self.compatibility is CompatibilityMode.UNIVERSAL
 
     @property
     def needs_audio_conversion(self) -> bool:
@@ -104,6 +142,7 @@ def build_request(
     quality: str = "best",
     audio_only: bool = False,
     audio_format: str = LOSSLESS_AUDIO_FORMAT,
+    compatibility: CompatibilityMode = DEFAULT_CLI_COMPATIBILITY,
     filename: str | None = None,
     ffmpeg_location: str | None = None,
     info_only: bool = False,
@@ -119,6 +158,7 @@ def build_request(
         quality=quality,
         audio_only=audio_only,
         audio_format=audio_format,
+        compatibility=compatibility,
         filename_template=template,
         ffmpeg_location=resolve_setting(ffmpeg_location, ENV_FFMPEG_LOCATION, env),
         info_only=info_only,

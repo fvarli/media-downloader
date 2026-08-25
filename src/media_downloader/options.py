@@ -23,6 +23,13 @@ FORMAT_WORST = "wv*+wa/w"
 FORMAT_PROGRESSIVE = "b"
 FORMAT_BEST_AUDIO = "ba/b"
 
+#: Resolution and frame rate decide first; a compatible codec is only a
+#: tie-breaker. So a 2160p H.264 stream wins over 2160p VP9 -- a free remux
+#: instead of an encode -- while 2160p that exists *only* as VP9 still beats
+#: 1080p H.264. Quality is never traded away to avoid a transcode; the file is
+#: normalised afterwards instead. Verified against yt-dlp's own FormatSorter.
+UNIVERSAL_FORMAT_SORT: tuple[str, ...] = ("res", "fps", "vcodec:h264", "acodec:aac")
+
 
 def build_format_selector(quality: str, *, ffmpeg_available: bool) -> str:
     """Build the yt-dlp format selector for a video download.
@@ -70,6 +77,19 @@ def build_ydl_opts(
         FFmpegRequiredError: if the request explicitly asks for audio
             conversion but FFmpeg is unavailable.
     """
+    if request.needs_universal_video and not ffmpeg.available:
+        # Universal is a promise that the output plays natively, and without
+        # ffprobe there is no way to check what was produced. Claiming it
+        # anyway is how an MP4 full of VP9 reached somebody's phone.
+        raise FFmpegRequiredError(
+            "Universal compatibility requires FFmpeg.",
+            hint=(
+                f"{FFMPEG_GUIDANCE} Alternatively choose original quality, which "
+                "keeps the source codecs and needs no conversion -- but does not "
+                "guarantee playback in native Apple or Windows players."
+            ),
+        )
+
     if request.needs_audio_conversion and not ffmpeg.available:
         raise FFmpegRequiredError(
             f"Converting audio to {request.audio_format} requires FFmpeg.",
@@ -113,6 +133,10 @@ def build_ydl_opts(
         # constructor above has already rejected any request needing conversion.
     else:
         opts["format"] = build_format_selector(request.quality, ffmpeg_available=ffmpeg.available)
+        if request.needs_universal_video:
+            # A preference, not a filter: nothing becomes unavailable, the
+            # already-compatible option is simply ranked first among equals.
+            opts["format_sort"] = list(UNIVERSAL_FORMAT_SORT)
 
     if ffmpeg.available and ffmpeg.location is not None:
         opts["ffmpeg_location"] = str(ffmpeg.location)

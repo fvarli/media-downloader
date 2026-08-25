@@ -7,11 +7,15 @@ from typing import Any
 
 import pytest
 
+from media_downloader.config import CompatibilityMode, DownloadRequest
 from media_downloader.errors import FFmpegRequiredError
 from media_downloader.ffmpeg import FFmpegStatus
 from media_downloader.jsruntime import JSRuntimeStatus
 from media_downloader.naming import AUTO_OUTPUT_TEMPLATE
 from media_downloader.options import (
+    FORMAT_BEST_AUDIO,
+    FORMAT_PROGRESSIVE,
+    UNIVERSAL_FORMAT_SORT,
     build_format_selector,
     build_info_opts,
     build_ydl_opts,
@@ -214,3 +218,87 @@ def test_windows_sanitisation_still_applies_under_automatic_naming(
     opts = build_ydl_opts(request_factory(filename_template=None), ffmpeg_present)
     assert opts["windowsfilenames"] is True
     assert opts["trim_file_name"] == 200
+
+
+# -- playback compatibility ----------------------------------------------
+#
+# Universal ranks an already-compatible stream first *among equals* rather than
+# filtering others out, so nothing becomes unreachable and resolution is never
+# traded away to avoid a transcode.
+
+
+def _request(**kwargs: Any) -> DownloadRequest:
+    from media_downloader.config import build_request
+
+    return build_request(url="https://x.com/a/status/1", output="/tmp/out", **kwargs)
+
+
+def test_universal_video_ranks_compatible_streams_first() -> None:
+    opts = build_ydl_opts(
+        _request(compatibility=CompatibilityMode.UNIVERSAL), FFmpegStatus(Path("f"), Path("p"))
+    )
+    assert opts["format_sort"] == list(UNIVERSAL_FORMAT_SORT)
+    # Resolution and frame rate come first; the codec is only a tie-breaker.
+    assert opts["format_sort"][:2] == ["res", "fps"]
+
+
+def test_universal_does_not_narrow_the_format_selector() -> None:
+    """A filter would make 4K unreachable when it exists only as VP9."""
+    universal = build_ydl_opts(
+        _request(compatibility=CompatibilityMode.UNIVERSAL), FFmpegStatus(Path("f"), Path("p"))
+    )
+    original = build_ydl_opts(
+        _request(compatibility=CompatibilityMode.ORIGINAL), FFmpegStatus(Path("f"), Path("p"))
+    )
+    assert universal["format"] == original["format"]
+
+
+def test_original_mode_adds_no_sorting_at_all() -> None:
+    opts = build_ydl_opts(
+        _request(compatibility=CompatibilityMode.ORIGINAL), FFmpegStatus(Path("f"), Path("p"))
+    )
+    assert "format_sort" not in opts
+
+
+def test_universal_requires_ffmpeg_rather_than_guessing() -> None:
+    """Without ffprobe there is no way to check what was produced, and saying
+    it is universal anyway is how an MP4 full of VP9 reached a phone."""
+    with pytest.raises(FFmpegRequiredError, match="Universal compatibility requires FFmpeg"):
+        build_ydl_opts(
+            _request(compatibility=CompatibilityMode.UNIVERSAL), FFmpegStatus(None, None)
+        )
+
+
+def test_the_refusal_points_at_the_way_out() -> None:
+    with pytest.raises(FFmpegRequiredError) as excinfo:
+        build_ydl_opts(
+            _request(compatibility=CompatibilityMode.UNIVERSAL), FFmpegStatus(None, None)
+        )
+    assert "original" in str(excinfo.value.hint).lower()
+
+
+def test_original_mode_still_works_without_ffmpeg() -> None:
+    """Nobody loses today's behaviour."""
+    opts = build_ydl_opts(
+        _request(compatibility=CompatibilityMode.ORIGINAL), FFmpegStatus(None, None)
+    )
+    assert opts["format"] == FORMAT_PROGRESSIVE
+
+
+def test_audio_downloads_are_untouched_by_video_compatibility() -> None:
+    """Audio-only has its own format handling; forcing video logic onto it
+    would change behaviour nobody asked to change."""
+    opts = build_ydl_opts(
+        _request(audio_only=True, compatibility=CompatibilityMode.UNIVERSAL),
+        FFmpegStatus(Path("f"), Path("p")),
+    )
+    assert "format_sort" not in opts
+    assert opts["format"] == FORMAT_BEST_AUDIO
+
+
+def test_audio_only_universal_does_not_demand_ffmpeg() -> None:
+    opts = build_ydl_opts(
+        _request(audio_only=True, compatibility=CompatibilityMode.UNIVERSAL),
+        FFmpegStatus(None, None),
+    )
+    assert opts["format"] == FORMAT_BEST_AUDIO
