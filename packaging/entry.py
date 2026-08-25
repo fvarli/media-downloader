@@ -15,6 +15,7 @@ invisible is put on screen in a dialog.
 from __future__ import annotations
 
 import multiprocessing
+import os
 import sys
 
 
@@ -84,9 +85,44 @@ def _main() -> int:
     except Exception:
         pass
 
+    # Internal validation only, like MD_DIAGNOSTIC_SELFTEST and MD_NO_BROWSER:
+    # never documented, never offered, off unless the variable is set. It exists
+    # so CI can put a real incompatible file through the *packaged* application
+    # -- its bundled code, its FFmpeg discovery -- rather than through the
+    # source checkout, which proves nothing about what was shipped.
+    fixture = os.environ.get("MD_COMPAT_SELFTEST")
+    if fixture:
+        return _compatibility_selftest(fixture)
+
     from media_downloader.cli import main
 
     return main()
+
+
+def _compatibility_selftest(fixture: str) -> int:
+    """Normalise one local file through the packaged pipeline and report."""
+    from pathlib import Path
+
+    from media_downloader.compatibility import MediaProbe, validate_universal
+    from media_downloader.normalize import make_universal_postprocessor
+
+    target = Path(fixture)
+    processor = make_universal_postprocessor()
+
+    before = validate_universal(MediaProbe.from_ffprobe(processor.get_metadata_object(str(target))))
+    print(f"before: ok={before.ok} {before.as_log_fields()}")
+
+    _, info = processor.run({"filepath": str(target)})
+    produced = Path(info["filepath"])
+    after = validate_universal(
+        MediaProbe.from_ffprobe(processor.get_metadata_object(str(produced)))
+    )
+    print(f"after:  ok={after.ok} {after.as_log_fields()}")
+    if not after.ok:
+        print("compatibility self-test FAILED: " + "; ".join(after.problems))
+        return 1
+    print("compatibility self-test passed")
+    return 0
 
 
 if __name__ == "__main__":

@@ -170,6 +170,39 @@ jobs:
       - name: Smoke-test the extracted archive
         run: python packaging/smoke_test.py "${{ matrix.extracted }}" --mode ${{ matrix.mode }}
 
+      # Requirement of this phase: put a genuinely incompatible file through the
+      # *packaged* application -- its bundled code and its FFmpeg discovery --
+      # rather than through the source checkout, which proves nothing about
+      # what was shipped. Honest about its own limits: if the runner has no
+      # FFmpeg, or cannot encode the fixture, it says so instead of passing
+      # quietly. HE-AAC is deliberately not attempted; producing it needs the
+      # nonfree libfdk_aac, and the native encoder is LC-only.
+      - name: Packaged media compatibility
+        shell: bash
+        run: |
+          set -u
+          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
+            echo "SKIPPED: this runner has no FFmpeg, so no fixture can be built."
+            echo "The compatibility pipeline is covered by the offline suite instead."
+            exit 0
+          fi
+          mkdir -p media
+          if ! ffmpeg -hide_banner -loglevel error -y \
+              -f lavfi -i "testsrc=size=160x120:rate=10:duration=1" \
+              -f lavfi -i "sine=frequency=440:duration=1" \
+              -c:v libvpx-vp9 -b:v 150k -pix_fmt yuv420p -c:a libopus \
+              -shortest media/incompatible.mp4; then
+            echo "SKIPPED: this FFmpeg cannot encode VP9/Opus, so the fixture is unavailable."
+            exit 0
+          fi
+          echo "fixture built:"
+          ffprobe -v error -show_entries stream=codec_name,codec_type,pix_fmt \
+            -of default=noprint_wrappers=1 media/incompatible.mp4
+          MD_COMPAT_SELFTEST="$PWD/media/incompatible.mp4" "${{ matrix.exe }}"
+          echo "result:"
+          ffprobe -v error -show_entries stream=codec_name,profile,pix_fmt \
+            -show_entries format=format_name -of default=noprint_wrappers=1 media/incompatible.mp4
+
       - name: Artifact metadata and checksum
         shell: bash
         run: |

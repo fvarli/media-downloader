@@ -19,6 +19,8 @@ codes, safe filename and path handling, and behaviour that is identical on Linux
 - A local web interface (`--web`) for when a terminal is not the right tool.
 - Automatic service detection for the explicitly supported platforms.
 - Best available video quality by default, with video and audio merged automatically.
+- **Universal playback mode** that normalises a video to H.264 + AAC in MP4 so it plays
+  natively on iPhone, Mac, Windows and Android — converting only what is incompatible.
 - Audio-only extraction, keeping the original stream when no conversion is asked for.
 - Height-capped quality selection (`--quality 1080`).
 - Metadata inspection without downloading (`--info`).
@@ -374,6 +376,7 @@ operating systems.
 | `URL` | Required. The public `http(s)` URL of the media. |
 | `-o`, `--output DIR` | Directory to save into. Default: `./downloads`. |
 | `-q`, `--quality` | `best`, `2160`, `1440`, `1080`, `720`, `480`, `360`, or `worst`. Default: `best`. Numeric values are an upper bound on height. |
+| `--compatibility` | `universal` or `original`. Default: `original` on the command line, `universal` in the web interface. See [Playback compatibility](#playback-compatibility). |
 | `--audio` | Download audio only. |
 | `--audio-format` | `best`, `mp3`, `m4a`, `opus`, `flac`, `wav`. Default: `best`, which keeps the original stream without re-encoding. Any other value requires FFmpeg. |
 | `--filename TEMPLATE` | yt-dlp output template for the file name, overriding the automatic naming below. Must be a bare file name — no directories. |
@@ -390,6 +393,39 @@ operating systems.
 
 Filename templates use [yt-dlp's output template syntax](https://github.com/yt-dlp/yt-dlp#output-template);
 useful fields include `%(title)s`, `%(id)s`, `%(ext)s`, `%(uploader)s` and `%(upload_date)s`.
+
+### Playback compatibility
+
+`.mp4` names a container, not the codecs inside it. A real download from this project produced an
+MP4 holding **VP9 video and HE-AAC audio**: it played on Linux, and on an iPhone it would not play
+normally, because Apple's native players decode H.264 and AAC-LC. That regression is what this
+feature exists to prevent.
+
+**Universal** — `--compatibility universal`, and the default in the web interface.
+
+The finished file is MP4 with H.264 video, AAC-LC audio, `yuv420p` and faststart. Broad native
+playback on iPhone, iPad, macOS, Windows, Android and mainstream browsers; not a guarantee about
+every device ever built.
+
+Quality is never traded for convenience:
+
+- Resolution and frame rate are chosen first. A compatible H.264 stream is preferred only when it
+  costs nothing, so 4K is never silently downgraded to 1080p to avoid a conversion.
+- Nothing is re-encoded that does not need to be. A file that is already H.264 + AAC-LC is
+  remuxed, not encoded again — no generation loss, no wasted CPU.
+- When only the audio is unsuitable, the video is copied and the audio alone is converted.
+- The finished file is then inspected with `ffprobe`, because FFmpeg exiting successfully is not
+  evidence that a phone will play the result.
+
+Conversion happens after the download and can take longer than the download itself, especially at
+high resolutions. It requires FFmpeg: without `ffprobe` there is no way to verify what was
+produced, so the mode refuses to run rather than claim a compatibility it cannot check.
+
+**Original** — `--compatibility original`, the command-line default.
+
+Today's behaviour, unchanged: the source codecs are kept, which is what you want when archiving at
+maximum quality. The result may be VP9, AV1 or another modern codec, and **native playback is not
+guaranteed** — particularly in Apple and Windows players.
 
 ### Automatic file names
 

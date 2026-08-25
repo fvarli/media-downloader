@@ -351,7 +351,22 @@ def check_web(executable: Path, *, console: bool) -> None:
             status, body = http(f"{url}/api/config", token)
             check("/api/config returns JSON", status == 200)
             if status == 200:
-                check("config reports a version", bool(json.loads(body).get("version")))
+                config = json.loads(body)
+                check("config reports a version", bool(config.get("version")))
+                # A packaged build must not quietly lose the compatibility
+                # policy: universal is what stops an MP4 full of VP9 being
+                # handed to somebody as a finished download.
+                modes = config.get("compatibility_choices") or []
+                check(
+                    "both compatibility modes offered",
+                    set(modes) == {"universal", "original"},
+                    str(modes),
+                )
+                check(
+                    "universal is the default",
+                    config.get("default_compatibility") == "universal",
+                    str(config.get("default_compatibility")),
+                )
 
             status, body = http(f"{url}/api/tools", token)
             check("/api/tools returns JSON", status == 200)
