@@ -58,6 +58,10 @@ assumes Bash or GNU utilities, and never hardcodes an OS-specific path.
 >   downloads a real YouTube video that then plays, saves into the downloads directory, and exports
 >   a support report. The web interface has also been used in a real browser for an Instagram
 >   download.
+> - **One playback result confirmed on real hardware.** A source that previously produced VP9 video
+>   with HE-AAC audio was downloaded again in Universal mode, giving H.264 High + AAC-LC + yuv420p
+>   in MP4. That exact file was transferred to an iPhone and played natively in Files / Quick Look.
+>   This is a single confirmed case, not a claim about every Apple device or codec combination.
 >
 > **macOS and Windows have no manual verification at all.** They are covered by the first two kinds
 > of evidence and nothing more. Real downloading, stream merging and audio conversion have been
@@ -503,15 +507,17 @@ we can pin and verify:
 | --- | --- | --- |
 | Linux x86_64 | Yes (LGPL build) | Yes |
 | Windows x64 | Yes (LGPL build) | Yes |
-| macOS arm64 | **No** -- see below | Yes |
+| macOS arm64 | Yes (built by this project) | Yes |
+| macOS Intel | **No** -- see below | Yes |
 
-**macOS FFmpeg cannot currently be installed automatically.** Every macOS provider examined failed
-at least one requirement: the only one linked from ffmpeg.org publishes no SHA-256 checksum, and the
-alternative that does publish checksums serves them behind a URL that is replaced in place when it
-rebuilds, without publishing its build flags -- so neither a stable pin nor the licence can be
-established. Rather than ship a binary that cannot be verified, the application reports the tool as
-unavailable on macOS and offers no install. Installing FFmpeg through Homebrew or another package
-manager works normally, and a system copy is always preferred anyway.
+**macOS FFmpeg is built here rather than taken from a third party.** Every macOS provider examined
+failed at least one requirement: the only one linked from ffmpeg.org publishes no SHA-256 checksum,
+and the alternative that does publish checksums serves them behind a URL replaced in place when it
+rebuilds, without publishing its build flags -- so neither a stable pin nor the licence could be
+established. So the Apple Silicon build is made from pinned sources by
+`packaging/ffmpeg/build-macos.sh`, published under its own tag, and pinned by checksum like every
+other tool. **Intel Macs still have no verified source** and are reported as unsupported; install
+FFmpeg with Homebrew there. A system copy is always preferred anyway.
 
 The CLI never downloads a tool. It uses one if it finds it, and otherwise behaves exactly as it
 always has.
@@ -638,18 +644,21 @@ FFmpeg and Deno are deliberately **not** bundled -- see [Optional tools](#option
 
 Not yet done, and not promised: code signing, notarization, installers, and published binaries.
 
-### macOS FFmpeg (research, not shipped)
+### macOS FFmpeg (built here)
 
-macOS is the only platform with no managed FFmpeg, because no published provider meets the
-licensing and provenance requirements at once. `packaging/ffmpeg/build-macos.sh` and the
-manually-dispatched `macos-ffmpeg` workflow build one from pinned sources instead: FFmpeg pinned by
-commit, libopus and LAME by SHA-256. The build refuses to package a binary whose own `-buildconf`
-shows `--enable-gpl` or `--enable-nonfree`, or one that links anything outside the system
-libraries, and it encodes every offered audio format before packaging anything.
+No published macOS provider meets the licensing and provenance requirements at once, so
+`packaging/ffmpeg/build-macos.sh` and the manually-dispatched `macos-ffmpeg` workflow build one
+from pinned sources: FFmpeg and libopenh264 pinned by commit, libopus and LAME by SHA-256. The
+build refuses to package a binary whose own `-buildconf` shows `--enable-gpl` or
+`--enable-nonfree`, or one that links anything outside the system libraries, and it encode-tests
+every capability -- MP3, Opus, AAC, FLAC, WAV, H.264 and a merge -- before packaging anything.
 
-**This is not shipped and not pinned.** The archive is uploaded for inspection only. A manifest URL
-has to be durable, public and unauthenticated, and a workflow artifact is none of those, so the
-application continues to report macOS FFmpeg as unsupported and to offer no install for it.
+libopenh264 is there because Universal mode needs an H.264 encoder and `libx264` is GPL, which an
+LGPL build cannot contain. Cisco's encoder is BSD-2-Clause and sits outside FFmpeg's GPL-only
+library list, and it is the same encoder the Linux and Windows builds already use.
+
+The result is published under its own tag as a **managed-tool dependency, not an application
+release**, which is what gives the manifest a durable public URL to pin.
 
 ### Continuous integration
 
@@ -773,11 +782,11 @@ These are accurate as of this version. They are limitations, not planned feature
 - **The web interface keeps no history between runs.** Its session list is in memory only.
 - **Standalone builds are development-only.** They can be built and are exercised by CI, but no
   standalone release exists; signing, notarization and installers remain future work.
-- **Managed FFmpeg is unavailable on macOS**, because no provider was found whose binaries can
-  be both version-pinned and licence-verified. An LGPL build from pinned sources exists in
-  `packaging/ffmpeg/`, but it is research: it has no durable public URL, so it is not in the
-  manifest and the application still reports macOS FFmpeg as unsupported. Install it with Homebrew
-  instead.
+- **Managed FFmpeg is unavailable on Intel Macs.** Apple Silicon is supported: the build is made
+  by this project from pinned sources — see `packaging/ffmpeg/build-macos.sh` — and published
+  under its own tag so the manifest has a durable URL to pin. No third-party macOS provider met
+  the bar, so Intel Macs still have no entry and are reported as unsupported rather than given a
+  hash nobody verified. Install FFmpeg with Homebrew there instead.
 - **No authentication.** No cookies, no browser-cookie extraction, no logins. Only publicly
   accessible media can be downloaded.
 - **No subtitle, thumbnail or metadata embedding.**

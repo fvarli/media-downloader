@@ -5,32 +5,36 @@
 > installation route. It exists so the project owner can test the release-shaped macOS and Windows
 > applications on real hardware, because CI cannot do that.
 
-## What changed since the last attempt
+## What changed since the last round
 
-The first Windows test failed: a correctly extracted build did nothing at all when double-clicked
-— no window, no browser, no log. The cause was ours, not the packaging. A double-click passes no
-arguments, and the application treated that as a usage error; a windowed build has no console for
-a usage message to appear in, so argparse discarded it and the process exited before any logging
-started. That is why there was nothing to look at.
+**The Windows silent-startup bug is fixed.** A double-click passes no arguments, and the
+application treated that as a usage error; a windowed build has no console for the message to
+appear in, so it exited before any logging started. A zero-argument launch now opens the
+interface, every launch records one line in the log before anything else can fail, and CI starts
+the windowed build the way a person does.
 
-A zero-argument launch of a windowed build now opens the interface, every launch records one line
-in the log before anything else can fail, and a windowed build that exits without opening says so
-in a dialog. CI now starts the windowed build the way a person does, with no arguments — the
-check that previously asserted the broken behaviour as correct.
+**macOS can now install FFmpeg.** It was the only platform without a verified source, so its users
+got no install button and Universal compatibility refused to run for them at all. The build is now
+made by this project and published under its own tag, and macOS CI installs it from that public
+URL for real.
+
+**Universal compatibility is in.** Video downloads are normalised to H.264 + AAC-LC in MP4 unless
+you choose Original. That is what closed the iPhone playback problem.
 
 ## What CI has and has not shown
 
-Three kinds of evidence, kept apart on purpose:
+Three kinds of evidence, kept apart on purpose. None of them substitutes for another.
 
 | Evidence | Covers |
 | --- | --- |
 | Automated source tests | Ubuntu, Windows, macOS on Python 3.10–3.13 |
-| Automated artifact checks | The frozen application starts, serves, logs and shuts down cleanly on all three platforms — checked against the extracted archive itself |
-| Owner manual verification | **Linux only.** A real YouTube download that played back, from the frozen artifact |
+| Automated artifact checks | The frozen application starts, serves, logs and shuts down cleanly on all four builds — checked against the extracted archive itself |
+| Automated media checks | The same VP9 + Opus MP4 converted by each frozen build to H.264 + AAC-LC; on macOS using FFmpeg installed from its real public URL |
+| **Owner manual verification** | **Linux only.** A real YouTube download that played back; and a Universal conversion whose output played natively on a real iPhone in Files / Quick Look |
 
 A green CI run is not a person double-clicking an application. Everything below is the part no
-runner can do: Gatekeeper, SmartScreen, whether a terminal window appears, and whether media
-actually downloads and plays.
+runner can do: Gatekeeper, SmartScreen, whether a terminal window appears, whether FFmpeg installs
+from a real browser session, and whether media actually downloads and plays.
 
 ## Get the artifacts
 
@@ -97,10 +101,16 @@ Get-FileHash Media-Downloader-Windows-x64-windowed.zip -Algorithm SHA256
 - [ ] **No terminal or console window appears at any point**
 - [ ] The default browser opens on its own
 - [ ] The Web UI loads at `127.0.0.1` and reports no error
+- [ ] **FFmpeg status**: unless you already have one on your PATH, the interface should now offer
+      to install it. This is the new part — macOS had no managed FFmpeg until now.
+- [ ] **Install FFmpeg through the interface** and confirm it succeeds. It downloads roughly 16 MB
+      from this repository's own `ffmpeg-n9.0.1-macos-arm64-1` release, checks it against a
+      checksum built into the application, and installs it privately — never onto your PATH.
 - [ ] Download an **Instagram** item
 - [ ] Download an **X/Twitter** item
 - [ ] Download a **YouTube** item
-- [ ] **Video — Best** produces a file that plays
+- [ ] **Video — Universal** produces a file that plays. This is the default and it may spend a
+      while on "Optimising compatibility" after the download; that is the conversion, not a hang.
 - [ ] **Audio — MP3** produces a file that plays
 - [ ] **Open Downloads Folder** opens the right directory and the files are in it
 - [ ] Paste an invalid URL: the error is understandable and the app stays usable
@@ -119,10 +129,11 @@ Get-FileHash Media-Downloader-Windows-x64-windowed.zip -Algorithm SHA256
 - [ ] **No console window appears at any point**
 - [ ] The default browser opens on its own
 - [ ] The Web UI loads at `127.0.0.1` and reports no error
+- [ ] **FFmpeg status**: install it through the interface if you do not already have one
 - [ ] Download an **Instagram** item
 - [ ] Download an **X/Twitter** item
 - [ ] Download a **YouTube** item
-- [ ] **Video — Best** produces a file that plays
+- [ ] **Video — Universal** produces a file that plays
 - [ ] **Audio — MP3** produces a file that plays
 - [ ] **Open Downloads Folder** opens the right directory and the files are in it
 - [ ] Paste an invalid URL: the error is understandable and the app stays usable
@@ -142,8 +153,14 @@ stranger. Two questions.
 - [ ] `JS runtime` names the runtime actually on that machine, with a matching version —
       `system node 22.20.0`, `managed deno 2.9.5`, or `unavailable`. A name from one program
       beside a version from another is the bug this replaced.
-- [ ] `FFmpeg` states the real source and version. On macOS with no FFmpeg installed, the
-      application should report it as unsupported and offer no install.
+- [ ] `FFmpeg` states the real source and version — `managed n9.0.1` after installing it through
+      the interface, or a system path if you already had one. It must not say unsupported: every
+      platform now has a verified source, and unsupported would mean you could not get FFmpeg.
+- [ ] The compatibility decision is recorded, e.g.
+      `compatibility=universal source_video_codec=… action=…` followed by
+      `final_video_codec=h264 final_audio_codec=aac final_audio_profile=LC final_container=mp4`.
+      A download that needed no conversion says `action=stream_copy`, which is correct and means
+      the source was already compatible.
 - [ ] The recent log shows a complete download lifecycle —
       `preparing → downloading → processing → completed` — with the service, media id and final
       filename on the completed record. Not a run that stops at `preparing`.
