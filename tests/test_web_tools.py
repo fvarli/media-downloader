@@ -140,14 +140,12 @@ def test_a_system_tool_is_reported_and_not_offered(
         assert entry["can_install"] is False
 
 
-def test_macos_offers_deno_but_never_ffmpeg(
+def test_apple_silicon_can_now_install_ffmpeg(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """macOS has a verified Deno source but no acceptable FFmpeg one.
-
-    The UI must reflect that honestly: no install button for a target we have
-    no trustworthy binary for.
-    """
+    """macOS was the one platform with no managed FFmpeg, so the interface had
+    to offer no install button there and universal compatibility refused to run
+    at all. It is now built by this project and published under its own tag."""
     installer, _ = make_installer(tmp_path, monkeypatch)
     installer._manager = ToolManager(
         env={"XDG_DATA_HOME": str(tmp_path / "d")},
@@ -158,10 +156,29 @@ def test_macos_offers_deno_but_never_ffmpeg(
     _, body = api.get_tools(context(tmp_path, installer))
     entries = {t["tool"]: t for t in body["tools"]}
 
-    assert entries["ffmpeg"]["state"] == "unsupported"
-    assert entries["ffmpeg"]["can_install"] is False
+    assert entries["ffmpeg"]["state"] == "missing"
+    assert entries["ffmpeg"]["can_install"] is True
     assert entries["deno"]["state"] == "missing"
     assert entries["deno"]["can_install"] is True
+
+
+def test_intel_macs_are_still_reported_honestly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No verified source exists for them, so the interface must offer no
+    install button rather than a target we cannot stand behind."""
+    installer, _ = make_installer(tmp_path, monkeypatch)
+    installer._manager = ToolManager(
+        env={"XDG_DATA_HOME": str(tmp_path / "d")},
+        fetcher=lambda *a, **k: None,
+        platform_name=lambda: "darwin",
+        machine=lambda: "x86_64",
+    )
+    _, body = api.get_tools(context(tmp_path, installer))
+    entries = {t["tool"]: t for t in body["tools"]}
+
+    assert entries["ffmpeg"]["state"] == "unsupported"
+    assert entries["ffmpeg"]["can_install"] is False
 
 
 def test_an_unsupported_platform_is_reported_not_offered(

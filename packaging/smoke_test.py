@@ -373,6 +373,16 @@ def check_web(executable: Path, *, console: bool) -> None:
             if status == 200:
                 tools = {t["tool"]: t for t in json.loads(body)["tools"]}
                 check("both tools reported", set(tools) == {"ffmpeg", "deno"})
+                # Every supported platform now has a verified FFmpeg source,
+                # macOS included. "unsupported" here would mean a user could
+                # not obtain FFmpeg at all, and universal compatibility would
+                # refuse to run for them.
+                ffmpeg = tools.get("ffmpeg", {})
+                check(
+                    "FFmpeg is obtainable, not unsupported",
+                    bool(ffmpeg.get("available") or ffmpeg.get("can_install")),
+                    f"state={ffmpeg.get('state')} can_install={ffmpeg.get('can_install')}",
+                )
 
             status, body = http(f"{url}/api/diagnostics", token)
             check("/api/diagnostics returns a report", status == 200)

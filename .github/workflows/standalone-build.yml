@@ -28,8 +28,67 @@ env:
   PYTHON_VERSION: '3.12'
 
 jobs:
+  # The compatibility fixture is manufactured once, here, and handed to every
+  # platform. It has to be: our macOS FFmpeg can *decode* VP9 but not encode
+  # it, and encoding VP9 is not something a user ever needs it to do. Building
+  # the fixture centrally keeps macOS testing the exact shape that failed on a
+  # real iPhone -- VP9 video with non-AAC audio in MP4 -- instead of a weaker
+  # stand-in chosen to suit the runner.
+  fixture:
+    name: Compatibility fixture
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install the project
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Build a VP9 + Opus MP4 with the managed FFmpeg
+        run: |
+          python - <<'EOF'
+          import pathlib
+          import subprocess
+
+          from media_downloader.tools.manager import ToolManager
+
+          root = pathlib.Path("tooling").resolve()
+          env = {k: str(root) for k in ("XDG_DATA_HOME", "LOCALAPPDATA", "HOME", "USERPROFILE")}
+          installed = ToolManager(env=env).install("ffmpeg")
+          out = pathlib.Path("media")
+          out.mkdir(exist_ok=True)
+          subprocess.run(
+              [
+                  str(installed / "ffmpeg"), "-hide_banner", "-loglevel", "error", "-y",
+                  "-f", "lavfi", "-i", "testsrc=size=160x120:rate=10:duration=1",
+                  "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+                  "-c:v", "libvpx-vp9", "-b:v", "150k", "-pix_fmt", "yuv420p",
+                  "-c:a", "libopus", "-shortest", str(out / "incompatible.mp4"),
+              ],
+              check=True,
+          )
+          print(subprocess.run(
+              [str(installed / "ffprobe"), "-v", "error", "-show_entries",
+               "stream=codec_name,codec_type,pix_fmt", "-of",
+               "default=noprint_wrappers=1", str(out / "incompatible.mp4")],
+              capture_output=True, text=True, check=True).stdout)
+          EOF
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: compatibility-fixture
+          path: media/incompatible.mp4
+          retention-days: 1
+          if-no-files-found: error
+
   build:
     name: ${{ matrix.label }}
+    needs: fixture
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -203,31 +262,40 @@ jobs:
       # FFmpeg, or cannot encode the fixture, it says so instead of passing
       # quietly. HE-AAC is deliberately not attempted; producing it needs the
       # nonfree libfdk_aac, and the native encoder is LC-only.
+      - name: Fetch the shared compatibility fixture
+        uses: actions/download-artifact@v8
+        with:
+          name: compatibility-fixture
+          path: media
+
+      # Every platform converts the SAME VP9 + Opus MP4 -- the shape that
+      # reached a real iPhone and would not play -- through the frozen
+      # application's own code and its own FFmpeg discovery. macOS only has to
+      # do what a user needs of it: decode VP9, encode H.264.
       - name: Packaged media compatibility
         shell: bash
         run: |
-          set -u
-          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
-            echo "SKIPPED: this runner has no FFmpeg, so no fixture can be built."
-            echo "The compatibility pipeline is covered by the offline suite instead."
-            exit 0
+          set -eu
+          FFPROBE="$(python -c "
+          import pathlib
+          from media_downloader.tools.manager import ToolManager
+          root = pathlib.Path('tooling').resolve()
+          env = {k: str(root) for k in ('XDG_DATA_HOME','LOCALAPPDATA','HOME','USERPROFILE')}
+          d = ToolManager(env=env).managed_dir('ffmpeg')
+          print(d / 'ffprobe' if d else '')
+          ")"
+          if [ -z "$FFPROBE" ]; then
+            echo "No managed FFmpeg on this platform; the conversion cannot be checked here."
+            exit 1
           fi
-          mkdir -p media
-          if ! ffmpeg -hide_banner -loglevel error -y \
-              -f lavfi -i "testsrc=size=160x120:rate=10:duration=1" \
-              -f lavfi -i "sine=frequency=440:duration=1" \
-              -c:v libvpx-vp9 -b:v 150k -pix_fmt yuv420p -c:a libopus \
-              -shortest media/incompatible.mp4; then
-            echo "SKIPPED: this FFmpeg cannot encode VP9/Opus, so the fixture is unavailable."
-            exit 0
-          fi
-          echo "fixture built:"
-          ffprobe -v error -show_entries stream=codec_name,codec_type,pix_fmt \
+          echo "source fixture:"
+          "$FFPROBE" -v error -show_entries stream=codec_name,codec_type,pix_fmt \
             -of default=noprint_wrappers=1 media/incompatible.mp4
           MD_COMPAT_SELFTEST="$PWD/media/incompatible.mp4" "${{ matrix.exe }}"
           echo "result:"
-          ffprobe -v error -show_entries stream=codec_name,profile,pix_fmt \
-            -show_entries format=format_name -of default=noprint_wrappers=1 media/incompatible.mp4
+          "$FFPROBE" -v error -show_entries stream=codec_name,profile,pix_fmt \
+            -show_entries format=format_name -of default=noprint_wrappers=1 \
+            media/incompatible.mp4
 
       - name: Artifact metadata and checksum
         shell: bash

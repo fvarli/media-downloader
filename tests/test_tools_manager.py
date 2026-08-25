@@ -47,7 +47,7 @@ def test_pinned_checksums_are_lowercase_hex() -> None:
 
 @pytest.mark.parametrize(
     ("platform", "machine"),
-    [("darwin", "arm64"), ("darwin", "x86_64"), ("linux", "aarch64")],
+    [("darwin", "x86_64"), ("linux", "aarch64")],
 )
 def test_unverified_ffmpeg_targets_are_absent_rather_than_guessed(
     platform: str, machine: str
@@ -56,22 +56,21 @@ def test_unverified_ffmpeg_targets_are_absent_rather_than_guessed(
     assert manifest.lookup(manifest.FFMPEG, platform, machine) is None
 
 
-def test_macos_ffmpeg_is_deliberately_unconfigured() -> None:
-    """No macOS FFmpeg provider met the trust requirements.
-
-    evermeet.cx publishes no SHA-256, and osxexperts.net serves a mutable
-    major-version URL with no configure flags, so GPL and nonfree components
-    cannot be ruled out. An absent entry is the honest state; a guessed hash
-    would not be.
-    """
-    for machine in ("arm64", "x86_64"):
-        assert manifest.lookup(manifest.FFMPEG, "darwin", machine) is None
+def test_macos_ffmpeg_is_configured_for_apple_silicon_only() -> None:
+    """No third-party macOS provider met the trust requirements -- evermeet.cx
+    publishes no SHA-256, osxexperts.net serves a mutable URL with no configure
+    flags -- so this one is built by the project and published under its own
+    tag. Intel Macs still have no entry, and an absent entry stays the honest
+    answer there rather than a guessed hash."""
+    assert manifest.lookup(manifest.FFMPEG, "darwin", "arm64") is not None
+    assert manifest.lookup(manifest.FFMPEG, "darwin", "x86_64") is None
 
 
 def test_verified_targets_are_present() -> None:
-    """The combinations whose checksums were taken from upstream."""
+    """The combinations whose checksums are pinned and verified."""
     assert manifest.lookup(manifest.FFMPEG, "linux", "x86_64") is not None
     assert manifest.lookup(manifest.FFMPEG, "win32", "AMD64") is not None
+    assert manifest.lookup(manifest.FFMPEG, "darwin", "arm64") is not None
     for platform, machine in (("linux", "x86_64"), ("darwin", "arm64"), ("win32", "AMD64")):
         assert manifest.lookup(manifest.DENO, platform, machine) is not None
 
@@ -280,11 +279,12 @@ def test_an_archive_missing_a_declared_binary_fails(
 
 
 def test_an_unconfigured_platform_refuses_to_install(linux_env: dict[str, str]) -> None:
+    # Intel Macs: still no verified source, so still no entry.
     mgr = ToolManager(
         env=linux_env,
         fetcher=lambda *a, **k: None,
         platform_name=lambda: "darwin",
-        machine=lambda: "arm64",
+        machine=lambda: "x86_64",
     )
     with pytest.raises(ToolInstallError, match="cannot be installed automatically"):
         mgr.install("ffmpeg")
@@ -450,7 +450,7 @@ def test_an_unsupported_platform_does_not_offer_an_install(linux_env: dict[str, 
         env=linux_env,
         fetcher=lambda *a, **k: None,
         platform_name=lambda: "darwin",
-        machine=lambda: "arm64",
+        machine=lambda: "x86_64",
     )
     status = mgr.status("ffmpeg", system_path=None)
     assert status.state is ToolState.UNSUPPORTED
@@ -468,3 +468,46 @@ def test_a_partial_install_is_not_reported_as_available(
 
     assert mgr.managed_dir("ffmpeg") is None
     assert mgr.status("ffmpeg", system_path=None).state is ToolState.MISSING
+
+
+# -- macOS FFmpeg, once it existed ---------------------------------------
+#
+# macOS was the one platform with no managed FFmpeg, so universal
+# compatibility refused to run there at all. It is now built by this project
+# and published under its own tag, which is what gives the manifest a durable
+# public URL to pin.
+
+
+def test_macos_ffmpeg_is_supported_now() -> None:
+    spec = manifest.lookup("ffmpeg", "darwin", "arm64")
+    assert spec is not None
+    assert spec.version == "n9.0.1"
+    assert spec.licence == "LGPL-2.1-or-later"
+
+
+def test_the_macos_url_is_a_durable_release_asset() -> None:
+    """A build artifact would have expired; a release asset does not. The URL
+    is pinned in shipped binaries, so it can never be re-pointed."""
+    spec = manifest.lookup("ffmpeg", "darwin", "arm64")
+    assert spec is not None
+    assert spec.url.startswith("https://github.com/")
+    assert "/releases/download/" in spec.url
+    assert "/actions/" not in spec.url
+
+
+def test_the_macos_archive_shape_matches_the_extractor() -> None:
+    spec = manifest.lookup("ffmpeg", "darwin", "arm64")
+    assert spec is not None
+    assert dict(spec.members) == {"ffmpeg": "bin/ffmpeg", "ffprobe": "bin/ffprobe"}
+    assert set(spec.executables) == {"ffmpeg", "ffprobe"}
+
+
+def test_every_pinned_tool_declares_a_plausible_size() -> None:
+    """The size bounds the download; zero would disable that guard."""
+    for spec in manifest._MANIFEST.values():
+        assert spec.size_bytes > 0, spec
+
+
+def test_no_pinned_url_is_plain_http() -> None:
+    for spec in manifest._MANIFEST.values():
+        assert spec.url.startswith("https://"), spec

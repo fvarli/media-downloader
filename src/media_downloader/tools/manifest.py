@@ -86,14 +86,30 @@ _MANIFEST: dict[tuple[str, str, str], ToolSpec] = {
         licence="LGPL-2.1-or-later",
         source="https://github.com/BtbN/FFmpeg-Builds",
     ),
-    # There is deliberately no (FFMPEG, "macos", ...) entry. No provider was
-    # found that meets every requirement at once: evermeet.cx is the only macOS
-    # source linked from ffmpeg.org but publishes no SHA-256 (PGP signatures
-    # only) and ships ffmpeg and ffprobe as separate archives, while
-    # osxexperts.net publishes checksums but behind a mutable major-version URL
-    # and without configure flags, so GPL and nonfree components cannot be ruled
-    # out. Reporting the target as unsupported is better than pinning a hash we
-    # cannot stand behind.
+    # Built by this project rather than taken from a third party, because no
+    # macOS provider meets every requirement at once: evermeet.cx is the only
+    # macOS source linked from ffmpeg.org but publishes no SHA-256 (PGP
+    # signatures only) and ships ffmpeg and ffprobe as separate archives, while
+    # osxexperts.net publishes checksums behind a mutable major-version URL and
+    # without configure flags, so GPL and nonfree components cannot be ruled
+    # out. Ours is built from pinned sources, asserted against its own
+    # -buildconf to carry neither --enable-gpl nor --enable-nonfree, and
+    # published under its own tag so this URL is durable and never re-pointed.
+    # See packaging/ffmpeg/build-macos.sh.
+    (FFMPEG, "macos", "arm64"): ToolSpec(
+        tool=FFMPEG,
+        version="n9.0.1",
+        url=(
+            "https://github.com/fvarli/media-downloader/releases/download/"
+            "ffmpeg-n9.0.1-macos-arm64-1/"
+            "ffmpeg-n9.0.1-macos-arm64-lgpl.tar.xz"
+        ),
+        sha256="57a7efc0cce1e357db606ef43223e2d4c96575cb4a674fac04847e6052a03b12",
+        size_bytes=16_196_104,
+        members=MappingProxyType({"ffmpeg": "bin/ffmpeg", "ffprobe": "bin/ffprobe"}),
+        licence="LGPL-2.1-or-later",
+        source="https://github.com/fvarli/media-downloader/releases/tag/ffmpeg-n9.0.1-macos-arm64-1",
+    ),
     (DENO, "macos", "arm64"): ToolSpec(
         tool=DENO,
         version="2.9.5",
