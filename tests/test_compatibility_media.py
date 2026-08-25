@@ -100,6 +100,24 @@ ffmpeg_required = pytest.mark.skipif(
 )
 
 
+def _has_encoder(name: str) -> bool:
+    """Whether this FFmpeg can encode ``name``.
+
+    Guarded on FFmpeg existing at all, because a skipif expression is evaluated
+    while tests are being collected -- and running `ffmpeg` there on a runner
+    that has none raises FileNotFoundError before any skip can apply.
+    """
+    if not shutil.which("ffmpeg"):
+        return False
+    probe = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-h", f"encoder={name}"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    return probe.returncode == 0 and f"Encoder {name}" in probe.stdout
+
+
 def _run(*args: str) -> None:
     subprocess.run(list(args), check=True, capture_output=True, timeout=600)
 
@@ -263,13 +281,7 @@ def test_a_video_without_audio_normalises_to_a_valid_mp4(tmp_path: Path) -> None
 
 
 @ffmpeg_required
-@pytest.mark.skipif(
-    subprocess.run(
-        ["ffmpeg", "-hide_banner", "-h", "encoder=libaom-av1"], capture_output=True, text=True
-    ).returncode
-    != 0,
-    reason="this FFmpeg cannot encode AV1, so the fixture cannot be built",
-)
+@pytest.mark.skipif(not _has_encoder("libaom-av1"), reason="this FFmpeg cannot encode AV1")
 def test_av1_is_normalised_to_h264(tmp_path: Path) -> None:
     source = tmp_path / "av1.mp4"
     _run(
