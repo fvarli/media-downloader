@@ -12,6 +12,7 @@ control flow is exercised without encoding anything.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -160,3 +161,54 @@ def test_no_output_path_is_left_alone() -> None:
     leftovers, returned = pp.run({})
     assert leftovers == []
     assert returned == {}
+
+
+def _with_executable(pp: Any, value: str | None) -> None:
+    """Point the postprocessor at a given FFmpeg.
+
+    `executable` is a read-only property, and the class is created fresh by
+    make_universal_postprocessor, so patching it here affects nothing else.
+    """
+    type(pp).executable = property(lambda self: value)  # type: ignore[assignment]
+
+
+def test_the_encoder_query_survives_having_no_ffmpeg() -> None:
+    """Universal already refuses to run without FFmpeg, so this path is
+    unreachable in practice -- but it must not raise a TypeError from deep
+    inside a postprocessor, which is exactly what it did on all twelve CI
+    jobs, since no runner has FFmpeg installed."""
+    pp = make_universal_postprocessor()
+    _with_executable(pp, None)
+    assert pp._video_encoder() == "libx264"
+
+
+def test_the_encoder_is_taken_from_the_binarys_own_listing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """libx264 is GPL and absent from the LGPL build this project installs, so
+    the encoder has to be discovered rather than assumed."""
+    import media_downloader.normalize as normalize_module
+
+    pp = make_universal_postprocessor()
+    _with_executable(pp, "ffmpeg")
+    listing = " V....D libopenh264          OpenH264 H.264 / AVC\n A....D aac  AAC\n"
+    monkeypatch.setattr(
+        normalize_module.subprocess,
+        "run",
+        lambda argv, **kwargs: SimpleNamespace(stdout=listing, returncode=0),
+    )
+    assert pp._video_encoder() == "libopenh264"
+
+
+def test_an_ffmpeg_with_no_h264_encoder_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Better a clear refusal than a conversion that cannot possibly work."""
+    import media_downloader.normalize as normalize_module
+
+    pp = make_universal_postprocessor()
+    _with_executable(pp, "ffmpeg")
+    monkeypatch.setattr(
+        normalize_module.subprocess,
+        "run",
+        lambda argv, **kwargs: SimpleNamespace(stdout=" V....D libvpx-vp9  VP9\n", returncode=0),
+    )
+    assert pp._video_encoder() == ""

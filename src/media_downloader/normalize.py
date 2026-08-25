@@ -131,15 +131,26 @@ def make_universal_postprocessor() -> Any:
             return leftovers, info
 
         def _video_encoder(self) -> str:
-            """Ask this FFmpeg which H.264 encoders it actually has."""
+            """Ask this FFmpeg which H.264 encoders it actually has.
+
+            Falls back to the preferred name whenever the question cannot be
+            asked -- including when there is no FFmpeg to ask, where
+            ``self.executable`` is None. Universal mode already refuses to run
+            without FFmpeg, so that path is unreachable in practice, but it
+            must not raise a TypeError from deep inside a postprocessor.
+            """
+            executable = self.executable
+            if not executable:
+                logger.debug("No FFmpeg to query; assuming the usual encoder.")
+                return H264_ENCODERS[0]
             try:
                 listing = subprocess.run(
-                    [self.executable, "-hide_banner", "-encoders"],
+                    [executable, "-hide_banner", "-encoders"],
                     capture_output=True,
                     text=True,
                     timeout=ENCODER_QUERY_TIMEOUT,
                 ).stdout
-            except (OSError, subprocess.SubprocessError):
+            except (OSError, ValueError, subprocess.SubprocessError):
                 logger.debug("Could not list encoders; assuming the usual one.")
                 return H264_ENCODERS[0]
             return choose_video_encoder(parse_available_encoders(listing)) or ""
