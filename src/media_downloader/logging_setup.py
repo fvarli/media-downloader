@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import logging.handlers
 
 from rich.console import Console
 from rich.logging import RichHandler
@@ -29,7 +30,14 @@ def configure_logging(
     logger.setLevel(level)
     logger.propagate = False
 
+    # Replace only the console handler. The rotating file handler is attached
+    # separately -- before arguments are even parsed, in a packaged build --
+    # and removing it here meant everything logged afterwards never reached the
+    # support report: the compatibility decisions, the job lifecycle, all of it
+    # visible on screen and absent from the file somebody would send in.
     for existing in list(logger.handlers):
+        if isinstance(existing, logging.handlers.RotatingFileHandler):
+            continue
         logger.removeHandler(existing)
 
     handler = RichHandler(

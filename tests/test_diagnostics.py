@@ -6,6 +6,7 @@ user emails to a stranger, so anything secret that reaches it is a real leak.
 
 from __future__ import annotations
 
+import io
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -346,3 +347,46 @@ def test_the_selftest_is_not_reachable_over_http() -> None:
     for text in surfaces:
         assert "MD_DIAGNOSTIC_SELFTEST" not in text
         assert "selftest" not in text.lower()
+
+
+# -- the file log must survive console setup -----------------------------
+
+
+def test_console_setup_keeps_the_file_handler(tmp_path: Path) -> None:
+    """Everything logged after the console was configured used to vanish from
+    the file: the compatibility decisions, the job lifecycle, all of it on
+    screen and absent from the report somebody would actually send in."""
+    from rich.console import Console
+
+    from media_downloader.logging_setup import LOGGER_NAME, configure_logging
+
+    path = configure_file_logging({"XDG_DATA_HOME": str(tmp_path), "HOME": str(tmp_path)})
+    assert path is not None
+
+    configure_logging(Console(file=io.StringIO()))
+    logger = logging.getLogger(LOGGER_NAME)
+
+    handlers = [h for h in logger.handlers if isinstance(h, logging.handlers.RotatingFileHandler)]
+    assert handlers, "the file handler was removed by console setup"
+
+    logging.getLogger(f"{LOGGER_NAME}.after").info("compatibility=universal action=stream_copy")
+    for handler in logger.handlers:
+        handler.flush()
+    assert "action=stream_copy" in path.read_text(encoding="utf-8")
+
+
+def test_console_setup_still_replaces_the_console_handler(tmp_path: Path) -> None:
+    """Otherwise repeated configuration would stack duplicate output."""
+    from rich.console import Console
+
+    from media_downloader.logging_setup import LOGGER_NAME, configure_logging
+
+    configure_file_logging({"XDG_DATA_HOME": str(tmp_path), "HOME": str(tmp_path)})
+    for _ in range(3):
+        configure_logging(Console(file=io.StringIO()))
+
+    logger = logging.getLogger(LOGGER_NAME)
+    console_handlers = [
+        h for h in logger.handlers if not isinstance(h, logging.handlers.RotatingFileHandler)
+    ]
+    assert len(console_handlers) == 1
