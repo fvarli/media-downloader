@@ -357,6 +357,8 @@ class JobManager:
             if job.progress.total_bytes:
                 job.progress = replace(job.progress, downloaded_bytes=job.progress.total_bytes)
             job.progress = replace(job.progress, filename=result.path.name)
+            # A finished job is not in a stage any more.
+            job.stage = None
             self._release_locked(job)
         _log_state(
             job,
@@ -371,6 +373,7 @@ class JobManager:
             job.state = JobState.FAILED
             job.error = error
             job.finished_at = time.time()
+            job.stage = None
             self._release_locked(job)
         # Correlates with the error ID the interface shows the user.
         _log_state(job, JobState.FAILED, code=error.code, error_id=error.error_id)
@@ -432,7 +435,7 @@ class JobManager:
                 if str(status.get("postprocessor") or "") in IGNORED_POSTPROCESSORS:
                     return
                 name = str(status.get("postprocessor") or "")
-                stage = POSTPROCESSOR_STAGES.get(name, DEFAULT_STAGE)
+                stage = POSTPROCESSOR_STAGES.get(name)
                 entering = False
                 with self._lock:
                     # Only a postprocessor that runs after the download is a
@@ -444,7 +447,11 @@ class JobManager:
                         # No invented percentage: FFmpeg progress is not
                         # reliably derivable here, so the interface says what is
                         # happening and shows an indeterminate indicator.
-                        job.stage = stage
+                        # A step we have no name for must not overwrite one we
+                        # do: yt-dlp runs its own fixups after ours, and letting
+                        # them replace "Optimising compatibility" with a generic
+                        # word would lose the only useful thing on screen.
+                        job.stage = stage or job.stage or DEFAULT_STAGE
                 if entering:
                     _log_state(job, JobState.PROCESSING)
             except Exception:  # pragma: no cover

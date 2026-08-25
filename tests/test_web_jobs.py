@@ -620,6 +620,26 @@ def test_an_internal_failure_records_the_error_id_the_user_is_shown(
 # inventing a percentage, because FFmpeg progress is not reliably derivable.
 
 
+def _stage_while_processing(
+    manager: JobManager, job_id: str, release: threading.Event
+) -> str | None:
+    """Read the stage while the job is still in it.
+
+    A finished job carries no stage, so it has to be observed mid-flight; the
+    fake downloader waits on the event after firing its postprocessor hooks.
+    """
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        job = manager.get(job_id)
+        assert job is not None
+        if job.state is JobState.PROCESSING and job.stage:
+            release.set()
+            return job.stage
+        time.sleep(0.01)
+    release.set()
+    return None
+
+
 @pytest.mark.parametrize(
     ("postprocessor", "expected"),
     [
@@ -632,41 +652,43 @@ def test_an_internal_failure_records_the_error_id_the_user_is_shown(
 def test_the_processing_phase_says_what_it_is_doing(
     request_for: Any, tmp_path: Path, postprocessor: str, expected: str
 ) -> None:
+    release = threading.Event()
     manager, _ = manager_for(
         result_path=tmp_path / "v.mp4",
         events=[
             {"status": "downloading", "downloaded_bytes": 1, "total_bytes": 2, "info_dict": {}}
         ],
         pp_events=[{"status": "started", "postprocessor": postprocessor}],
+        block=release,
     )
     job = manager.submit(request_for("https://x.com/a/status/1"))
-    finished = wait_until_done(manager, job.id)
-    assert finished.stage == expected
-
-
-def test_the_stage_is_absent_until_something_slow_starts(request_for: Any, tmp_path: Path) -> None:
-    manager, _ = manager_for(result_path=tmp_path / "v.mp4")
-    job = manager.submit(request_for("https://x.com/a/status/1"))
+    stage = _stage_while_processing(manager, job.id, release)
     wait_until_done(manager, job.id)
-    assert manager.get(job.id).stage is None
+    assert stage == expected
 
 
-def test_our_own_naming_step_never_shows_as_a_stage(request_for: Any, tmp_path: Path) -> None:
-    """It runs before any bytes move, so reporting it would flash a phase at
-    the user before the download had even started."""
+def test_an_unnamed_step_does_not_overwrite_a_named_one(request_for: Any, tmp_path: Path) -> None:
+    """yt-dlp runs its own fixups after ours. Letting them replace "Optimising
+    compatibility" with a generic word loses the only useful thing on screen."""
+    release = threading.Event()
     manager, _ = manager_for(
         result_path=tmp_path / "v.mp4",
         events=[
             {"status": "downloading", "downloaded_bytes": 1, "total_bytes": 2, "info_dict": {}}
         ],
-        pp_events=[{"status": "started", "postprocessor": "AutoName"}],
+        pp_events=[
+            {"status": "started", "postprocessor": "UniversalCompatibility"},
+            {"status": "started", "postprocessor": "FixupM4a"},
+        ],
+        block=release,
     )
     job = manager.submit(request_for("https://x.com/a/status/1"))
+    stage = _stage_while_processing(manager, job.id, release)
     wait_until_done(manager, job.id)
-    assert manager.get(job.id).stage is None
+    assert stage == "Optimising compatibility"
 
 
-def test_the_stage_reaches_the_interface(request_for: Any, tmp_path: Path) -> None:
+def test_a_finished_job_is_not_in_a_stage(request_for: Any, tmp_path: Path) -> None:
     manager, _ = manager_for(
         result_path=tmp_path / "v.mp4",
         events=[
@@ -675,5 +697,30 @@ def test_the_stage_reaches_the_interface(request_for: Any, tmp_path: Path) -> No
         pp_events=[{"status": "started", "postprocessor": "UniversalCompatibility"}],
     )
     job = manager.submit(request_for("https://x.com/a/status/1"))
+    finished = wait_until_done(manager, job.id)
+    assert finished.stage is None
+    assert finished.snapshot()["stage"] is None
+
+
+def test_the_stage_reaches_the_interface(request_for: Any, tmp_path: Path) -> None:
+    release = threading.Event()
+    manager, _ = manager_for(
+        result_path=tmp_path / "v.mp4",
+        events=[
+            {"status": "downloading", "downloaded_bytes": 1, "total_bytes": 2, "info_dict": {}}
+        ],
+        pp_events=[{"status": "started", "postprocessor": "UniversalCompatibility"}],
+        block=release,
+    )
+    job = manager.submit(request_for("https://x.com/a/status/1"))
+    deadline = time.monotonic() + 5
+    seen = None
+    while time.monotonic() < deadline:
+        snapshot = manager.get(job.id).snapshot()
+        if snapshot["state"] == "processing" and snapshot["stage"]:
+            seen = snapshot["stage"]
+            break
+        time.sleep(0.01)
+    release.set()
     wait_until_done(manager, job.id)
-    assert manager.get(job.id).snapshot()["stage"] == "Optimising compatibility"
+    assert seen == "Optimising compatibility"
