@@ -29,6 +29,15 @@ def _report_invisible_failure(exc: BaseException | None, code: int) -> None:
 
         if not is_windowed_app():
             return
+        # Only a launch that carried no arguments. That is the double-click,
+        # and the only case where a failure is genuinely invisible. Anyone who
+        # passed arguments to a windowed build is working from a command line
+        # and has chosen where output goes; interrupting them with a modal
+        # dialog for an ordinary "that is not a URL" would be wrong, and on an
+        # unattended machine it blocks until somebody clicks it -- which is
+        # exactly how this hung two CI jobs for two minutes each.
+        if len(sys.argv) > 1:
+            return
 
         from media_downloader.diagnostics import STATE, record_error
         from media_downloader.logging_setup import get_logger

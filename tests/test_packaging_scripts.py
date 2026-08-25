@@ -201,3 +201,72 @@ def test_the_report_denylist_covers_every_named_leak() -> None:
     forbidden = {item.lower() for item in smoke_test.FORBIDDEN_IN_REPORT}
     for required in ("x-md-token", "authorization", "cookie", "pytest", "/runner/"):
         assert required in forbidden
+
+
+# -- the frozen entry point's failure reporting --------------------------
+#
+# A windowed build that exits without opening anything must say so, because
+# there is no console for it to have said anything in. The trigger has to be
+# narrow: an earlier version fired on *any* non-zero exit, so passing a bad URL
+# to a windowed build popped a modal dialog. On an unattended machine nobody
+# dismisses it, and it hung two CI jobs for two minutes each.
+
+
+entry = _load(PACKAGING / "entry.py", "_entry")
+
+
+@pytest.fixture
+def _windowed(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """A windowed build whose dialog records instead of blocking."""
+    shown: list[str] = []
+    import media_downloader.buildmode as buildmode_module
+    import media_downloader.web.system as system_module
+
+    monkeypatch.setattr(buildmode_module, "is_windowed_app", lambda: True)
+    monkeypatch.setattr(
+        system_module,
+        "show_startup_error",
+        lambda message, error_id, log_dir=None: shown.append(message),
+    )
+    return shown
+
+
+def test_a_silent_double_click_failure_is_reported(
+    monkeypatch: pytest.MonkeyPatch, _windowed: list[str]
+) -> None:
+    monkeypatch.setattr(entry.sys, "argv", ["media-downloader"])
+    entry._report_invisible_failure(None, 2)
+    assert _windowed
+
+
+def test_a_failure_with_arguments_is_left_alone(
+    monkeypatch: pytest.MonkeyPatch, _windowed: list[str]
+) -> None:
+    """The bad-URL case: a command line was used, so output has a home."""
+    monkeypatch.setattr(entry.sys, "argv", ["media-downloader", "not-a-url"])
+    entry._report_invisible_failure(None, 3)
+    assert not _windowed
+
+
+def test_a_console_build_never_pops_a_dialog(monkeypatch: pytest.MonkeyPatch) -> None:
+    shown: list[str] = []
+    import media_downloader.buildmode as buildmode_module
+    import media_downloader.web.system as system_module
+
+    monkeypatch.setattr(buildmode_module, "is_windowed_app", lambda: False)
+    monkeypatch.setattr(system_module, "show_startup_error", lambda *a, **k: shown.append("x"))
+    monkeypatch.setattr(entry.sys, "argv", ["media-downloader"])
+    entry._report_invisible_failure(None, 2)
+    assert not shown
+
+
+def test_reporting_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A build that is already failing must not fail differently."""
+    import media_downloader.buildmode as buildmode_module
+
+    def explode() -> bool:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(buildmode_module, "is_windowed_app", explode)
+    monkeypatch.setattr(entry.sys, "argv", ["media-downloader"])
+    entry._report_invisible_failure(RuntimeError("original"), 1)  # must not raise
