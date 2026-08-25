@@ -24,6 +24,7 @@ const el = {
   form: $('form'), url: $('url'), paste: $('paste'),
   modeVideo: $('mode-video'), modeAudio: $('mode-audio'),
   qualityField: $('quality-field'), quality: $('quality'),
+  compatibilityField: $('compatibility-field'),
   audioField: $('audio-format-field'), audioFormat: $('audio-format'),
   submit: $('submit'), status: $('status'),
   recent: $('recent'), recentList: $('recent-list'),
@@ -128,14 +129,21 @@ function renderStatus() {
 
   el.status.innerHTML = '';
   const bar = document.createElement('div');
-  bar.className = percent == null ? 'bar bar--indeterminate' : 'bar';
+  const indeterminate = percent == null || job.state === 'processing';
+  bar.className = indeterminate ? 'bar bar--indeterminate' : 'bar';
   const fill = document.createElement('div');
   fill.className = 'bar__fill';
-  if (percent != null) fill.style.width = `${percent.toFixed(1)}%`;
+  if (percent != null && !indeterminate) fill.style.width = `${percent.toFixed(1)}%`;
   bar.append(fill);
 
   el.status.append(
-    row(PHASES[job.state] || job.state, percent == null ? '' : `${percent.toFixed(0)}%`),
+    // The stage says what the processing phase is actually doing. Converting
+    // for compatibility can outlast the download, and a bar frozen at 100%
+    // with no explanation reads as a hang.
+    row(
+      (job.state === 'processing' && job.stage) || PHASES[job.state] || job.state,
+      job.state === 'processing' || percent == null ? '' : `${percent.toFixed(0)}%`,
+    ),
     text('status__name', name),
     bar,
     ...(describe(job) ? [text('status__hint', describe(job))] : []),
@@ -179,8 +187,18 @@ function renderControls() {
   el.modeAudio.setAttribute('aria-checked', String(audio));
   el.qualityField.hidden = audio;
   el.audioField.hidden = !audio;
+  // Audio downloads keep their own format handling; video compatibility has
+  // nothing to say about them.
+  el.compatibilityField.hidden = audio;
   el.submit.disabled = state.busy;
   el.submit.textContent = state.busy ? 'Downloading…' : 'Download';
+}
+
+// Falls back to the server's default rather than assuming, so the interface
+// and the application cannot disagree about what "no choice made" means.
+function selectedCompatibility() {
+  const picked = el.compatibilityField.querySelector('input[name=compatibility]:checked');
+  return picked ? picked.value : (state.config.default_compatibility || 'universal');
 }
 
 function formatSize(bytes) {
@@ -339,6 +357,7 @@ async function startDownload(event) {
         audio_only: state.mode === 'audio',
         quality: el.quality.value,
         audio_format: el.audioFormat.value,
+        compatibility: selectedCompatibility(),
       }),
     });
     state.job = job;

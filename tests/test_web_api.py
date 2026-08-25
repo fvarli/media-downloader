@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from media_downloader.config import CompatibilityMode
 from media_downloader.downloader import DownloadResult, MediaInfo
 from media_downloader.ffmpeg import FFmpegStatus
 from media_downloader.jsruntime import JSRuntimeStatus
@@ -167,9 +168,64 @@ def test_the_browser_cannot_choose_where_files_land(tmp_path: Path) -> None:
 
 
 def test_notices_are_returned_for_the_ui(tmp_path: Path) -> None:
+    """Original mode still degrades gracefully without FFmpeg, as it always
+    has -- the notice is how the user learns quality was reduced."""
     ctx = make_context(tmp_path, ffmpeg=False)
-    _, body = api.create_download(ctx, {"url": "https://x.com/a/status/1"})
+    _, body = api.create_download(
+        ctx, {"url": "https://x.com/a/status/1", "compatibility": "original"}
+    )
     assert any("FFmpeg" in notice["message"] for notice in body["notices"])
+
+
+# -- playback compatibility ----------------------------------------------
+#
+# A real download produced an MP4 holding VP9 and HE-AAC. It played on Linux
+# and an iPhone would not play it normally, so the application now has an
+# explicit policy and the interface defaults to the one that plays anywhere.
+
+
+def test_the_interface_offers_both_modes_and_defaults_to_universal(tmp_path: Path) -> None:
+    _, config = api.get_config(make_context(tmp_path))
+    assert set(config["compatibility_choices"]) == {"universal", "original"}
+    assert config["default_compatibility"] == "universal"
+
+
+def test_a_download_with_no_stated_mode_is_universal(tmp_path: Path) -> None:
+    ctx = make_context(tmp_path)
+    status, _ = api.create_download(ctx, {"url": "https://x.com/a/status/1"})
+    assert status == 202
+    assert ctx.jobs.history()[0].request.compatibility is CompatibilityMode.UNIVERSAL
+
+
+def test_original_mode_is_still_reachable(tmp_path: Path) -> None:
+    """Nobody loses the ability to keep the source codecs."""
+    ctx = make_context(tmp_path)
+    status, _ = api.create_download(
+        ctx, {"url": "https://x.com/a/status/1", "compatibility": "original"}
+    )
+    assert status == 202
+    assert ctx.jobs.history()[0].request.compatibility is CompatibilityMode.ORIGINAL
+
+
+def test_universal_is_refused_rather_than_faked_without_ffmpeg(tmp_path: Path) -> None:
+    """Universal is a promise that the file plays. Without ffprobe there is no
+    way to check what was produced, and claiming it anyway is how an MP4 full
+    of VP9 reached somebody's phone."""
+    ctx = make_context(tmp_path, ffmpeg=False)
+    status, body = api.create_download(
+        ctx, {"url": "https://x.com/a/status/1", "compatibility": "universal"}
+    )
+    assert status != 202
+    assert body["error"]["code"] == "FFMPEG_REQUIRED"
+    assert ctx.jobs.history() == []
+
+
+def test_an_unknown_mode_is_rejected(tmp_path: Path) -> None:
+    status, body = api.create_download(
+        make_context(tmp_path), {"url": "https://x.com/a/status/1", "compatibility": "magic"}
+    )
+    assert status == 400
+    assert "compatibility" in body["error"]["message"]
 
 
 # -- reading jobs --------------------------------------------------------

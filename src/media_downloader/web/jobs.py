@@ -49,6 +49,17 @@ HISTORY_LIMIT = 25
 #: AutoNamePP injects the cleaned filename at pre_process time.
 IGNORED_POSTPROCESSORS = frozenset({"AutoName"})
 
+#: Human-readable names for the phases that take real time. Compatibility
+#: conversion can outlast the download itself, so leaving the interface sitting
+#: at 100% with no explanation would look like a hang.
+POSTPROCESSOR_STAGES: dict[str, str] = {
+    "Merger": "Merging video and audio",
+    "UniversalCompatibility": "Optimising compatibility",
+    "ExtractAudio": "Extracting audio",
+    "VideoConvertor": "Converting",
+}
+DEFAULT_STAGE = "Processing"
+
 
 class JobState(str, Enum):
     """Lifecycle of a download job."""
@@ -172,6 +183,9 @@ class Job:
     state: JobState = JobState.QUEUED
     progress: JobProgress = field(default_factory=JobProgress)
     title: str | None = None
+    #: What the processing phase is currently doing, in plain words. None until
+    #: a postprocessor that takes real time starts.
+    stage: str | None = None
     result_path: Path | None = None
     error: JobError | None = None
     created_at: float = field(default_factory=time.time)
@@ -184,6 +198,7 @@ class Job:
         return {
             "id": self.id,
             "state": self.state.value,
+            "stage": self.stage,
             "url": self.request.url,
             "title": self.title,
             "audio_only": self.request.audio_only,
@@ -416,6 +431,8 @@ class JobManager:
                     return
                 if str(status.get("postprocessor") or "") in IGNORED_POSTPROCESSORS:
                     return
+                name = str(status.get("postprocessor") or "")
+                stage = POSTPROCESSOR_STAGES.get(name, DEFAULT_STAGE)
                 entering = False
                 with self._lock:
                     # Only a postprocessor that runs after the download is a
@@ -423,6 +440,11 @@ class JobManager:
                     if job.state is JobState.DOWNLOADING:
                         job.state = JobState.PROCESSING
                         entering = True
+                    if job.state is JobState.PROCESSING:
+                        # No invented percentage: FFmpeg progress is not
+                        # reliably derivable here, so the interface says what is
+                        # happening and shows an indeterminate indicator.
+                        job.stage = stage
                 if entering:
                     _log_state(job, JobState.PROCESSING)
             except Exception:  # pragma: no cover

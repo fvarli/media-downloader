@@ -611,3 +611,69 @@ def test_an_internal_failure_records_the_error_id_the_user_is_shown(
     assert finished.error.error_id is not None
     assert f"error_id={finished.error.error_id}" in failed
     assert "internal explosion" not in failed  # the ID is the handle, not the text
+
+
+# -- the processing stage ------------------------------------------------
+#
+# Compatibility conversion can outlast the download. A bar frozen at 100% with
+# no explanation reads as a hang, so the phase says what it is doing -- without
+# inventing a percentage, because FFmpeg progress is not reliably derivable.
+
+
+@pytest.mark.parametrize(
+    ("postprocessor", "expected"),
+    [
+        ("UniversalCompatibility", "Optimising compatibility"),
+        ("Merger", "Merging video and audio"),
+        ("ExtractAudio", "Extracting audio"),
+        ("SomethingElse", "Processing"),
+    ],
+)
+def test_the_processing_phase_says_what_it_is_doing(
+    request_for: Any, tmp_path: Path, postprocessor: str, expected: str
+) -> None:
+    manager, _ = manager_for(
+        result_path=tmp_path / "v.mp4",
+        events=[
+            {"status": "downloading", "downloaded_bytes": 1, "total_bytes": 2, "info_dict": {}}
+        ],
+        pp_events=[{"status": "started", "postprocessor": postprocessor}],
+    )
+    job = manager.submit(request_for("https://x.com/a/status/1"))
+    finished = wait_until_done(manager, job.id)
+    assert finished.stage == expected
+
+
+def test_the_stage_is_absent_until_something_slow_starts(request_for: Any, tmp_path: Path) -> None:
+    manager, _ = manager_for(result_path=tmp_path / "v.mp4")
+    job = manager.submit(request_for("https://x.com/a/status/1"))
+    wait_until_done(manager, job.id)
+    assert manager.get(job.id).stage is None
+
+
+def test_our_own_naming_step_never_shows_as_a_stage(request_for: Any, tmp_path: Path) -> None:
+    """It runs before any bytes move, so reporting it would flash a phase at
+    the user before the download had even started."""
+    manager, _ = manager_for(
+        result_path=tmp_path / "v.mp4",
+        events=[
+            {"status": "downloading", "downloaded_bytes": 1, "total_bytes": 2, "info_dict": {}}
+        ],
+        pp_events=[{"status": "started", "postprocessor": "AutoName"}],
+    )
+    job = manager.submit(request_for("https://x.com/a/status/1"))
+    wait_until_done(manager, job.id)
+    assert manager.get(job.id).stage is None
+
+
+def test_the_stage_reaches_the_interface(request_for: Any, tmp_path: Path) -> None:
+    manager, _ = manager_for(
+        result_path=tmp_path / "v.mp4",
+        events=[
+            {"status": "downloading", "downloaded_bytes": 1, "total_bytes": 2, "info_dict": {}}
+        ],
+        pp_events=[{"status": "started", "postprocessor": "UniversalCompatibility"}],
+    )
+    job = manager.submit(request_for("https://x.com/a/status/1"))
+    wait_until_done(manager, job.id)
+    assert manager.get(job.id).snapshot()["stage"] == "Optimising compatibility"

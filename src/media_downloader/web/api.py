@@ -18,8 +18,11 @@ from typing import Any
 from media_downloader import __version__
 from media_downloader.config import (
     AUDIO_FORMAT_CHOICES,
+    COMPATIBILITY_CHOICES,
+    DEFAULT_APP_COMPATIBILITY,
     LOSSLESS_AUDIO_FORMAT,
     QUALITY_CHOICES,
+    CompatibilityMode,
     build_request,
 )
 from media_downloader.diagnostics import (
@@ -75,6 +78,10 @@ def get_config(ctx: ApiContext) -> tuple[int, dict[str, Any]]:
         "quality_choices": list(QUALITY_CHOICES),
         "audio_formats": list(AUDIO_FORMAT_CHOICES),
         "default_audio_format": LOSSLESS_AUDIO_FORMAT,
+        # The application defaults to the mode that plays anywhere; the command
+        # line keeps its own default so existing scripts do not change meaning.
+        "compatibility_choices": list(COMPATIBILITY_CHOICES),
+        "default_compatibility": DEFAULT_APP_COMPATIBILITY.value,
         "download_dir": str(ctx.download_dir),
         "ffmpeg_available": ctx.environment.ffmpeg.available,
         "js_runtime_available": ctx.environment.js_runtime.available,
@@ -100,11 +107,14 @@ def create_download(ctx: ApiContext, body: dict[str, Any]) -> tuple[int, dict[st
     audio_only = bool(body.get("audio_only", False))
     quality = body.get("quality", "best")
     audio_format = body.get("audio_format", LOSSLESS_AUDIO_FORMAT)
+    compatibility = body.get("compatibility", DEFAULT_APP_COMPATIBILITY.value)
 
     if quality not in QUALITY_CHOICES:
         return 400, _bad_choice("quality", quality, QUALITY_CHOICES)
     if audio_format not in AUDIO_FORMAT_CHOICES:
         return 400, _bad_choice("audio format", audio_format, AUDIO_FORMAT_CHOICES)
+    if compatibility not in COMPATIBILITY_CHOICES:
+        return 400, _bad_choice("compatibility", compatibility, COMPATIBILITY_CHOICES)
 
     try:
         # validate_url is a separate step from build_request -- the CLI calls it
@@ -117,6 +127,7 @@ def create_download(ctx: ApiContext, body: dict[str, Any]) -> tuple[int, dict[st
             quality=str(quality),
             audio_only=audio_only,
             audio_format=str(audio_format),
+            compatibility=CompatibilityMode(str(compatibility)),
             env={},
         )
     except MediaDownloaderError as exc:

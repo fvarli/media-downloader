@@ -206,3 +206,49 @@ select.input { appearance: none; cursor: pointer; padding-right: 34px;
 .help__result { color: var(--muted); margin: 10px 0 0; word-break: break-word; }
 .help__result--error { color: var(--error); }
 .status__id { font-size: 12px; color: var(--muted); font-family: ui-monospace, monospace; }
+
+/* Playback compatibility: two choices, plain language, no codec jargon in the
+   foreground. A real download produced an MP4 holding VP9 that an iPhone would
+   not play, so this is the control that decides whether that can happen. */
+.choice {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.6rem 0.75rem 0.75rem;
+  margin: 0;
+}
+.choice__option {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  padding: 0.45rem 0;
+  cursor: pointer;
+}
+.choice__option + .choice__option {
+  border-top: 1px solid var(--border);
+}
+.choice__option input {
+  margin-top: 0.25rem;
+  flex: none;
+}
+.choice__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.choice__title {
+  font-weight: 600;
+}
+.choice__badge {
+  font-weight: 500;
+  font-size: 0.75rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: var(--accent-soft, rgba(56, 132, 255, 0.15));
+  color: var(--accent, #2f6fd0);
+  vertical-align: middle;
+}
+.choice__detail {
+  font-size: 0.85rem;
+  color: var(--muted);
+  line-height: 1.35;
+}

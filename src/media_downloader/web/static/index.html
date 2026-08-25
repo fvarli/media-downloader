@@ -45,6 +45,27 @@
       <select class="input" id="audio-format"></select>
     </label>
 
+    <fieldset class="field choice" id="compatibility-field">
+      <legend class="field__label">Video compatibility</legend>
+      <label class="choice__option">
+        <input type="radio" name="compatibility" value="universal" checked>
+        <span class="choice__body">
+          <span class="choice__title">Universal <span class="choice__badge">Recommended</span></span>
+          <span class="choice__detail">MP4 &middot; H.264 &middot; AAC &mdash; plays natively on
+            iPhone, Mac, Windows and Android. Converts only when it has to, which can take a
+            little longer.</span>
+        </span>
+      </label>
+      <label class="choice__option">
+        <input type="radio" name="compatibility" value="original">
+        <span class="choice__body">
+          <span class="choice__title">Original quality</span>
+          <span class="choice__detail">Keeps the source codecs. Some files will not play in
+            native Apple or Windows players.</span>
+        </span>
+      </label>
+    </fieldset>
+
     <button class="button button--primary" id="submit" type="submit">Download</button>
   </form>
 
