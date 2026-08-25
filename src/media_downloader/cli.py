@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from rich.console import Console
 
 from media_downloader import __version__
+from media_downloader.buildmode import is_windowed_app
 from media_downloader.config import (
     AUDIO_FORMAT_CHOICES,
     ENV_FFMPEG_LOCATION,
@@ -220,13 +221,21 @@ def run(argv: Sequence[str] | None = None) -> int:
     out_console = Console()
     configure_logging(console, verbose=args.verbose, quiet=args.quiet)
 
-    # Exactly one mode. Making the URL optional must not turn a bare
-    # `media-downloader` into a valid no-op, and a URL with --web is ambiguous
-    # about what the user wanted, so both are usage errors.
+    # Exactly one mode. A URL with --web is ambiguous about what the user
+    # wanted, so it stays a usage error.
     if args.web and args.url is not None:
         parser.error("--web starts the web interface and cannot be combined with a URL.")
+
     if not args.web and args.url is None:
-        parser.error("a URL is required (or use --web for the web interface).")
+        # A double-clicked application is handed no arguments at all, and a
+        # windowed build has no console for a usage message to appear in --
+        # argparse discards the write and exits 2, which is exactly how this
+        # looked like "nothing happens" on a real Windows desktop. Opening the
+        # interface is the only thing a bare launch can sensibly mean there.
+        if is_windowed_app():
+            args.web = True
+        else:
+            parser.error("a URL is required (or use --web for the web interface).")
 
     if args.web:
         from media_downloader.web.launcher import serve

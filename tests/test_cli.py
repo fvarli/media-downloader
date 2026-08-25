@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -318,7 +319,96 @@ def test_web_mode_parses_without_a_url() -> None:
 
 
 def test_a_bare_invocation_is_still_a_usage_error() -> None:
-    """The positional is optional only so --web can stand alone."""
+    """From a console or from source, where a usage message can be read."""
+    with pytest.raises(SystemExit) as excinfo:
+        run([])
+    assert excinfo.value.code == int(ExitCode.USAGE_ERROR)
+
+
+# -- the Windows double-click blocker ------------------------------------
+#
+# A double-clicked application receives no arguments, and a windowed build has
+# no console for a usage message to appear in: argparse discards the write and
+# exits 2. On a real Windows desktop that looked like nothing happening at all
+# -- no window, no browser, and no log, because file logging only started
+# inside serve(), which was never reached. CI called it correct, because the
+# smoke test asserted "bare invocation exits 2".
+
+
+@pytest.fixture
+def _windowed_app(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pretend to be a packaged build with no console."""
+    import media_downloader.cli as cli_module
+
+    monkeypatch.setattr(cli_module, "is_windowed_app", lambda: True)
+
+
+@pytest.fixture
+def _no_standard_streams(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exactly what Explorer hands a GUI-subsystem process: no streams.
+
+    The smoke test never reproduced this, because it spawned the executable
+    with DEVNULL -- which are valid handles, so sys.stdout and sys.stderr were
+    real file objects and the bug stayed invisible.
+    """
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+
+
+def test_a_double_click_opens_the_web_interface(
+    monkeypatch: pytest.MonkeyPatch, _windowed_app: None, _no_standard_streams: None
+) -> None:
+    """The regression: no argv, no streams, windowed build -- the UI must open."""
+    started: list[bool] = []
+
+    import media_downloader.web.launcher as launcher_module
+
+    monkeypatch.setattr(
+        launcher_module, "serve", lambda console, **kwargs: started.append(True) or 0
+    )
+
+    assert run([]) == int(ExitCode.SUCCESS)
+    assert started == [True]
+
+
+def test_a_double_click_does_not_write_to_absent_streams(
+    monkeypatch: pytest.MonkeyPatch, _windowed_app: None, _no_standard_streams: None
+) -> None:
+    """Printing with no stream to print to must not be fatal.
+
+    Rich already substitutes a null file when sys.stderr is None, so no wrapper
+    of our own is needed -- checked rather than assumed, because a guard that
+    duplicates one already in the library is worse than no guard. This test
+    keeps the guarantee honest if that ever stops being true.
+    """
+    import media_downloader.web.launcher as launcher_module
+
+    def serve_and_print(console: Any, **kwargs: Any) -> int:
+        console.print("starting")  # would raise against a None stream
+        return 0
+
+    monkeypatch.setattr(launcher_module, "serve", serve_and_print)
+    assert run([]) == int(ExitCode.SUCCESS)
+
+
+def test_explicit_arguments_still_behave_the_same_in_a_windowed_build(
+    monkeypatch: pytest.MonkeyPatch, _windowed_app: None
+) -> None:
+    """Only the empty launch changes meaning; everything else is untouched."""
+    with pytest.raises(SystemExit) as excinfo:
+        run([VALID_URL, "--web"])
+    assert excinfo.value.code == int(ExitCode.USAGE_ERROR)
+
+    assert run(["definitely not a url"]) == int(ExitCode.INVALID_URL)
+
+
+def test_a_console_build_still_reports_usage_when_given_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Linux console artifact keeps the command-line contract."""
+    import media_downloader.cli as cli_module
+
+    monkeypatch.setattr(cli_module, "is_windowed_app", lambda: False)
     with pytest.raises(SystemExit) as excinfo:
         run([])
     assert excinfo.value.code == int(ExitCode.USAGE_ERROR)

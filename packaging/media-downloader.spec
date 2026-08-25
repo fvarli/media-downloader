@@ -25,6 +25,8 @@ Build with:
 
 import os
 import sys
+import tempfile
+from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files
 
@@ -45,6 +47,18 @@ IS_MACOS = sys.platform == "darwin"
 # The web UI's HTML/CSS/JS are read through importlib.resources at runtime, so
 # they must land inside the package directory in the bundle.
 datas = collect_data_files("media_downloader", includes=["web/static/*"])
+
+# Record console-vs-windowed *in* the bundle, because the application has to
+# know at runtime and cannot reliably tell by looking. A double-clicked
+# windowed build gets no arguments and has no console for a usage message, so
+# this marker is what lets a bare launch open the interface instead of exiting
+# silently. Read back by media_downloader.buildmode.
+# A directory, because PyInstaller keeps the source filename: the marker has
+# to be called build_mode.txt on disk to arrive under that name.
+_marker_dir = Path(tempfile.mkdtemp(prefix="md-build-mode-"))
+_marker = _marker_dir / "build_mode.txt"
+_marker.write_text("windowed" if WINDOWED else "console", encoding="utf-8")
+datas += [(str(_marker), "media_downloader")]
 
 a = Analysis(
     ["entry.py"],
