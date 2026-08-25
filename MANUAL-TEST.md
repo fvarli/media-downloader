@@ -5,6 +5,19 @@
 > installation route. It exists so the project owner can test the release-shaped macOS and Windows
 > applications on real hardware, because CI cannot do that.
 
+## What changed since the last attempt
+
+The first Windows test failed: a correctly extracted build did nothing at all when double-clicked
+— no window, no browser, no log. The cause was ours, not the packaging. A double-click passes no
+arguments, and the application treated that as a usage error; a windowed build has no console for
+a usage message to appear in, so argparse discarded it and the process exited before any logging
+started. That is why there was nothing to look at.
+
+A zero-argument launch of a windowed build now opens the interface, every launch records one line
+in the log before anything else can fail, and a windowed build that exits without opening says so
+in a dialog. CI now starts the windowed build the way a person does, with no arguments — the
+check that previously asserted the broken behaviour as correct.
+
 ## What CI has and has not shown
 
 Three kinds of evidence, kept apart on purpose:
@@ -24,11 +37,22 @@ actually downloads and plays.
 Built by the **Standalone build** workflow. Each run produces, per platform, the archive itself
 plus a small metadata artifact holding `artifact-info.json` and a `.sha256` file.
 
-| Platform | Archive |
-| --- | --- |
-| macOS arm64 | `Media-Downloader-macOS-arm64-windowed.zip` |
-| Windows x64 | `Media-Downloader-Windows-x64-windowed.zip` |
-| Linux x86_64 | `Media-Downloader-Linux-x86_64.tar.gz` |
+| Platform | Archive | Use |
+| --- | --- | --- |
+| macOS arm64 | `Media-Downloader-macOS-arm64-windowed.zip` | the one to test |
+| Windows x64 | `Media-Downloader-Windows-x64-windowed.zip` | the one to test |
+| Windows x64 | `Media-Downloader-Windows-x64-console.zip` | diagnostics only, see below |
+| Linux x86_64 | `Media-Downloader-Linux-x86_64.tar.gz` | the one to test |
+
+> **Extract the whole archive.** `media-downloader.exe` cannot run without the `_internal\`
+> folder beside it; separating them gives *"Failed to load Python DLL …\_internal\python312.dll"*.
+> That message means the layout is wrong, not that anything is missing from the download.
+
+> **The console build is a diagnostic tool, not the application.** It is the same commit and the
+> same spec, built with a console attached. If the windowed build ever does nothing at all, run
+> the console build from a terminal and send what it prints. Note that its behaviour differs on
+> purpose: run with no arguments it prints a usage message, while the windowed build opens the
+> interface.
 
 The archives are packed on their own native runners and uploaded as single files, so what
 downloads is exactly the archive — no wrapper zip, one extraction. CI verifies that the uploaded
