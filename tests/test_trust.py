@@ -85,11 +85,29 @@ def test_certifi_is_added_to_platform_trust_not_substituted_for_it() -> None:
     assert certifi_only <= ours, "certifi roots were not added"
 
 
-def test_the_context_trusts_more_than_either_source_alone() -> None:
+def test_the_context_trusts_exactly_the_union_of_the_two_sources() -> None:
+    """Not "more than either" -- that is only true where they differ.
+
+    On macOS the platform trust *is* certifi, because the python.org installer
+    points OpenSSL at that same bundle, so the two sets are identical there and
+    a strict-growth assertion would fail on a perfectly correct build. The
+    invariant that holds everywhere is that we trust their union: everything
+    from both, and nothing beyond them.
+    """
+    certifi = pytest.importorskip("certifi")
+
+    ours = _subjects(trust.create_https_context())
+    platform_only = _subjects(ssl.create_default_context())
+    certifi_only = _subjects(ssl.create_default_context(cafile=certifi.where()))
+
+    assert ours == platform_only | certifi_only
+
+
+def test_the_context_is_never_smaller_than_either_source() -> None:
     certifi = pytest.importorskip("certifi")
     ours = _subjects(trust.create_https_context())
-    assert len(ours) > len(_subjects(ssl.create_default_context()))
-    assert len(ours) > len(_subjects(ssl.create_default_context(cafile=certifi.where())))
+    assert len(ours) >= len(_subjects(ssl.create_default_context()))
+    assert len(ours) >= len(_subjects(ssl.create_default_context(cafile=certifi.where())))
 
 
 def test_the_trust_sources_are_reported_for_diagnostics() -> None:
