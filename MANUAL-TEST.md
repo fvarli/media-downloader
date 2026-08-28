@@ -7,19 +7,16 @@
 
 ## What changed since the last round
 
-**The Windows silent-startup bug is fixed.** A double-click passes no arguments, and the
-application treated that as a usage error; a windowed build has no console for the message to
-appear in, so it exited before any logging started. A zero-argument launch now opens the
-interface, every launch records one line in the log before anything else can fail, and CI starts
-the windowed build the way a person does.
+**Managed downloads failed on your Windows machine and now should not.** Both FFmpeg and Deno died
+with `CERTIFICATE_VERIFY_FAILED`. The packaging was fine and the machine was fine: yt-dlp reached
+YouTube from that same application, because it asks for certifi's certificate bundle, while our
+downloader asked for nothing and fell back to whatever roots Windows had cached. Windows fills that
+store lazily, and both download hosts now use roots added recently. Managed downloads now trust the
+platform's roots **and** certifi's, so a private company root still works and a missing public one
+no longer stops the download.
 
-**macOS can now install FFmpeg.** It was the only platform without a verified source, so its users
-got no install button and Universal compatibility refused to run for them at all. The build is now
-made by this project and published under its own tag, and macOS CI installs it from that public
-URL for real.
-
-**Universal compatibility is in.** Video downloads are normalised to H.264 + AAC-LC in MP4 unless
-you choose Original. That is what closed the iPhone playback problem.
+That is the one thing this build needs you to re-test, on the same machine, still without
+installing FFmpeg or Deno by hand.
 
 ## What CI has and has not shown
 
@@ -129,7 +126,16 @@ Get-FileHash Media-Downloader-Windows-x64-windowed.zip -Algorithm SHA256
 - [ ] **No console window appears at any point**
 - [ ] The default browser opens on its own
 - [ ] The Web UI loads at `127.0.0.1` and reports no error
-- [ ] **FFmpeg status**: install it through the interface if you do not already have one
+- [ ] **FFmpeg is initially unavailable** — expected, nothing has been installed by hand
+- [ ] **Install FFmpeg through the interface.** This is the check that failed last time. It must
+      download over verified HTTPS, pass its checksum, extract, and become available — with no
+      certificate error.
+- [ ] **Deno is initially unavailable**, then **install it through the interface** too. Same
+      requirement: verified HTTPS, checksum, extract, available.
+- [ ] **Retry the exact YouTube URL that previously said "Requested format is not available."**
+      That failure happened with no JavaScript runtime installed, so it may simply have been a
+      consequence of the missing Deno. If it still fails now that Deno works, say so — it is then
+      a separate problem and will be treated as one.
 - [ ] Download an **Instagram** item
 - [ ] Download an **X/Twitter** item
 - [ ] Download a **YouTube** item
@@ -156,6 +162,9 @@ stranger. Two questions.
 - [ ] `FFmpeg` states the real source and version — `managed n9.0.1` after installing it through
       the interface, or a system path if you already had one. It must not say unsupported: every
       platform now has a verified source, and unsupported would mean you could not get FFmpeg.
+- [ ] `HTTPS trust` names its sources, e.g. `system + certifi 2026.07.22`. If it says only
+      `system`, the certificate bundle did not load and the download problem would return.
+- [ ] There is no TLS or certificate error anywhere in the report.
 - [ ] The compatibility decision is recorded, e.g.
       `compatibility=universal source_video_codec=… action=…` followed by
       `final_video_codec=h264 final_audio_codec=aac final_audio_profile=LC final_container=mp4`.
