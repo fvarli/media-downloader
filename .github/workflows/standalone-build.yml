@@ -262,6 +262,21 @@ jobs:
       # FFmpeg, or cannot encode the fixture, it says so instead of passing
       # quietly. HE-AAC is deliberately not attempted; producing it needs the
       # nonfree libfdk_aac, and the native encoder is LC-only.
+      # A real Windows machine could not install FFmpeg or Deno --
+      # CERTIFICATE_VERIFY_FAILED -- while CI stayed green, because runners
+      # have complete certificate stores and ours never asked for a CA bundle
+      # at all. The download succeeding here proves little on a healthy
+      # runner; the trust sources are the part that does not depend on the
+      # machine, so the self-test asserts those and then makes a real request.
+      - name: Packaged HTTPS trust
+        shell: bash
+        run: |
+          set -eu
+          MD_TLS_SELFTEST="https://github.com/denoland/deno/releases/download/v2.9.5/deno-x86_64-unknown-linux-gnu.zip" \
+            "${{ matrix.exe }}" | tee tls-selftest.txt
+          grep -q "certifi: True" tls-selftest.txt
+          grep -q "TLS self-test passed" tls-selftest.txt
+
       - name: Fetch the shared compatibility fixture
         uses: actions/download-artifact@v8
         with:

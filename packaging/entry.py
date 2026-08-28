@@ -18,6 +18,10 @@ import multiprocessing
 import os
 import sys
 
+#: Enough to prove the handshake, the redirect and a real transfer, without
+#: pulling down a whole tool on every CI job.
+PROBE_BYTES = 512 * 1024
+
 
 def _report_invisible_failure(exc: BaseException | None, code: int) -> None:
     """Put a failure in front of a user who has no console to read.
@@ -94,9 +98,59 @@ def _main() -> int:
     if fixture:
         return _compatibility_selftest(fixture)
 
+    probe = os.environ.get("MD_TLS_SELFTEST")
+    if probe:
+        return _tls_selftest(probe)
+
     from media_downloader.cli import main
 
     return main()
+
+
+def _tls_selftest(url: str) -> int:
+    """Prove the packaged build's HTTPS trust, through the shared path.
+
+    Internal validation only, like the other self-tests: never documented,
+    never offered, off unless the variable is set.
+
+    It reports which trust sources loaded *and* performs a real verified
+    request, because those catch different things. A real machine with a
+    complete certificate store downloads successfully either way -- which is
+    exactly how a Windows build that could not install anything shipped green.
+    The trust sources are the part that does not depend on the machine.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from media_downloader.tools.trust import https_fetch, trust_sources
+
+    sources = trust_sources()
+    print(f"https trust: {sources.describe()}")
+    print(f"authorities: {sources.authority_count}")
+    print(f"certifi: {sources.certifi}")
+    if not sources.certifi:
+        print("TLS self-test FAILED: certifi was not loaded")
+        return 1
+
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp) / "probe.bin"
+        try:
+            # A bounded prefix of the real pinned asset: enough to complete
+            # the handshake, follow the redirect and actually move bytes, but
+            # not the whole tool. Exceeding the limit is the expected outcome.
+            https_fetch(url, target, max_bytes=PROBE_BYTES)
+        except Exception as exc:  # the failure is the result
+            message = str(getattr(exc, "message", None) or exc)
+            if "larger than expected" not in message:
+                print(f"TLS self-test FAILED: {message}")
+                return 1
+        transferred = target.stat().st_size if target.exists() else 0
+        if not transferred:
+            print("TLS self-test FAILED: the connection carried no data")
+            return 1
+        print(f"verified request to the pinned host succeeded ({transferred} bytes read)")
+    print("TLS self-test passed")
+    return 0
 
 
 def _compatibility_selftest(fixture: str) -> int:

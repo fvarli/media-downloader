@@ -22,8 +22,8 @@ The rules are deliberately strict and are enforced in code, not by convention:
 Discovery and installation are separate: looking for a tool never downloads one.
 """
 
+from media_downloader.errors import ToolInstallError
 from media_downloader.tools.manager import (
-    ToolInstallError,
     ToolManager,
     ToolState,
     ToolStatus,

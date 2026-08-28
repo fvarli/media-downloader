@@ -295,6 +295,21 @@ def recent_log_lines(limit: int = REPORT_LOG_LINES) -> list[str]:
         return []
 
 
+def _https_trust() -> str:
+    """Which certificate authorities managed downloads trust.
+
+    Worth a line because a real Windows machine could not install anything at
+    all until this was fixed, and the answer is the first thing to check if it
+    happens again. Names the sources only -- never a path, never a certificate.
+    """
+    try:
+        from media_downloader.tools.trust import trust_sources
+
+        return trust_sources().describe()
+    except Exception:  # diagnostics must never be the thing that fails
+        return "unknown"
+
+
 def build_support_report(
     *,
     download_dir: Path | None = None,
@@ -321,6 +336,7 @@ def build_support_report(
         f"yt-dlp:       {_ytdlp_version()}",
         f"FFmpeg:       {ffmpeg_summary}",
         f"JS runtime:   {js_summary}",
+        f"HTTPS trust:  {_https_trust()}",
         f"Downloads:    {download_dir if download_dir else 'unknown'}",
         f"App data:     {app_data_dir(env)}",
         f"Log file:     {STATE.log_file or 'not available'}",

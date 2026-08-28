@@ -332,7 +332,7 @@ def test_https_is_enforced_by_the_real_fetcher(tmp_path: Path) -> None:
 
 
 def _redirect_to(target: str) -> Any:
-    from media_downloader.tools.manager import HTTPSOnlyRedirectHandler
+    from media_downloader.tools.trust import HTTPSOnlyRedirectHandler
 
     handler = HTTPSOnlyRedirectHandler()
     request = urllib.request.Request("https://example.invalid/tool.zip")
@@ -361,15 +361,28 @@ def test_a_redirect_that_stays_on_https_is_followed() -> None:
     assert redirected.full_url == "https://objects.githubusercontent.com/tool.zip"
 
 
-def test_the_fetcher_installs_the_redirect_handler() -> None:
-    """A handler nothing is wired to would protect nothing."""
-    from media_downloader.tools.manager import HTTPSOnlyRedirectHandler, https_fetch
+def test_the_fetcher_goes_through_the_shared_opener() -> None:
+    """A handler nothing is wired to would protect nothing, and a context
+    nothing is wired to is how the Windows failure happened in the first
+    place: the trust was available and simply never asked for."""
+    from media_downloader.tools import trust
 
-    source = inspect.getsource(https_fetch)
-    assert "build_opener(HTTPSOnlyRedirectHandler)" in source
-    assert "opener.open(" in source
-    assert "urllib.request.urlopen(" not in source
-    assert issubclass(HTTPSOnlyRedirectHandler, urllib.request.HTTPRedirectHandler)
+    fetch_source = inspect.getsource(trust.https_fetch)
+    assert "create_https_opener()" in fetch_source
+    assert "opener.open(" in fetch_source
+    assert "urllib.request.urlopen(" not in fetch_source
+
+    opener_source = inspect.getsource(trust.create_https_opener)
+    assert "create_https_context()" in opener_source
+    assert "HTTPSOnlyRedirectHandler" in opener_source
+    assert issubclass(trust.HTTPSOnlyRedirectHandler, urllib.request.HTTPRedirectHandler)
+
+
+def test_the_manager_uses_the_shared_fetcher_by_default() -> None:
+    """Both managed tools must take one path, not two workarounds."""
+    from media_downloader.tools import manager, trust
+
+    assert manager.https_fetch is trust.https_fetch
 
 
 # -- discovery ----------------------------------------------------------

@@ -35,6 +35,11 @@ classifiers = [
 dependencies = [
     "yt-dlp[default]>=2026.8.19",
     "rich>=13.0",
+    # Declared explicitly because the managed-tool downloader imports it
+    # directly to add Mozilla's roots to the platform's own trust. It already
+    # arrives through yt-dlp[default]; depending on it by accident is not the
+    # same as depending on it.
+    "certifi",
 ]
 
 [project.optional-dependencies]

@@ -19,7 +19,6 @@ import platform as platform_module
 import shutil
 import stat
 import tempfile
-import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
@@ -28,11 +27,12 @@ from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlsplit
 
-from media_downloader.errors import MediaDownloaderError
+from media_downloader.errors import MediaDownloaderError, ToolInstallError
 from media_downloader.logging_setup import get_logger
 from media_downloader.paths import ensure_dir, tool_install_dir, tools_dir
 from media_downloader.tools.archive import extract_members
 from media_downloader.tools.manifest import ToolSpec, lookup
+from media_downloader.tools.trust import https_fetch
 from media_downloader.tools.verify import verify_sha256
 from media_downloader.web.system import current_platform
 
@@ -42,10 +42,6 @@ DOWNLOAD_TIMEOUT_SECONDS = 60
 #: Refuse a response wildly larger than the manifest says, so a compromised or
 #: redirected source cannot fill the user's disk before the checksum is checked.
 SIZE_TOLERANCE = 1.5
-
-
-class ToolInstallError(MediaDownloaderError):
-    """An install could not be completed. Nothing was left behind."""
 
 
 class ToolState(str, Enum):
@@ -85,69 +81,6 @@ class Fetcher(Protocol):
     """Downloads a URL to a path. Injected so tests never hit the network."""
 
     def __call__(self, url: str, destination: Path, *, max_bytes: int) -> None: ...
-
-
-class HTTPSOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Follows redirects only while they stay on HTTPS.
-
-    Checking the URL we were given is not enough on its own: ``urlopen``
-    follows redirects, and the default handler is happy to follow one to
-    ``http://``. Every download we pin redirects at least once -- GitHub sends
-    release assets to objects.githubusercontent.com -- so the hop is the normal
-    path, not an edge case, and it is unverified by the initial scheme check.
-
-    Fails closed. A download that cannot stay on HTTPS does not happen.
-    """
-
-    def redirect_request(
-        self,
-        req: urllib.request.Request,
-        fp: object,
-        code: int,
-        msg: str,
-        headers: object,
-        newurl: str,
-    ) -> urllib.request.Request | None:
-        scheme = urlsplit(newurl).scheme
-        if scheme != "https":
-            raise ToolInstallError(
-                "Refusing a download that redirected away from HTTPS.",
-                hint="The download was stopped before anything was written.",
-            )
-        return super().redirect_request(req, fp, code, msg, headers, newurl)  # type: ignore[arg-type]
-
-
-def https_fetch(url: str, destination: Path, *, max_bytes: int) -> None:
-    """Fetch ``url`` over HTTPS into ``destination``.
-
-    Refuses any non-HTTPS URL even though the manifest is the only caller --
-    a second check costs nothing and means a future manifest typo cannot
-    silently downgrade the transport. Redirects are held to the same rule; see
-    :class:`HTTPSOnlyRedirectHandler`.
-    """
-    if urlsplit(url).scheme != "https":
-        raise ToolInstallError(f"Refusing a non-HTTPS download URL: {url}")
-
-    request = urllib.request.Request(url, headers={"User-Agent": "media-downloader"})
-    opener = urllib.request.build_opener(HTTPSOnlyRedirectHandler)
-    written = 0
-    try:
-        with (
-            opener.open(request, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response,
-            destination.open("wb") as out,
-        ):
-            while True:
-                chunk = response.read(1024 * 256)
-                if not chunk:
-                    break
-                written += len(chunk)
-                if written > max_bytes:
-                    raise ToolInstallError("The download was larger than expected and was stopped.")
-                out.write(chunk)
-    except ToolInstallError:
-        raise
-    except Exception as exc:
-        raise ToolInstallError(f"The download failed: {exc}") from exc
 
 
 class ToolManager:

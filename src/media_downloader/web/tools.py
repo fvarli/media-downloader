@@ -14,12 +14,11 @@ import threading
 from typing import Any
 
 from media_downloader.diagnostics import record_error
-from media_downloader.errors import MediaDownloaderError
+from media_downloader.errors import MediaDownloaderError, ToolInstallError
 from media_downloader.ffmpeg import FFmpegStatus, detect_ffmpeg
 from media_downloader.jsruntime import detect_js_runtime, runtime_version
 from media_downloader.logging_setup import get_logger
 from media_downloader.tools.manager import (
-    ToolInstallError,
     ToolManager,
     ToolState,
     ToolStatus,

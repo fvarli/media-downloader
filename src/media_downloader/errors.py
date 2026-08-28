@@ -68,6 +68,15 @@ class MediaUnavailableError(MediaDownloaderError):
     exit_code = ExitCode.MEDIA_UNAVAILABLE
 
 
+class ToolInstallError(MediaDownloaderError):
+    """An install could not be completed. Nothing was left behind.
+
+    Defined here with the rest of the hierarchy rather than beside the
+    installer, so the HTTPS layer and the tool manager can both raise it
+    without importing each other.
+    """
+
+
 class OutputError(MediaDownloaderError):
     """The output directory or filename template cannot be used."""
 
