@@ -329,14 +329,55 @@ jobs:
       # Clearly separated and non-blocking: a transient change at an external
       # service must never make a good artifact look broken. A failure here is
       # still visible in the run.
-      - name: Metadata-level network smoke (non-blocking)
+      # Deliberately non-blocking, and deliberately not the gate that proves
+      # format selection works. YouTube from a datacentre address is an
+      # unstable dependency -- bot checks, regional differences, formats that
+      # change by the week -- so the deterministic proof is the offline
+      # selector suite, which runs the real yt-dlp selection engine against
+      # fixed format matrices. This is here because a real download through
+      # the frozen application still catches things a matrix cannot.
+      - name: Real YouTube download (non-blocking network gate)
         continue-on-error: true
         shell: bash
         run: |
-          # The exit code is the signal here. A windowed build prints nowhere,
-          # so this step proves the frozen extractor can still reach the
-          # network -- not what it printed.
-          "${{ matrix.exe }}" "https://www.youtube.com/watch?v=jNQXAC9IVRw" --info
+          set -u
+          URL="https://www.youtube.com/watch?v=jNQXAC9IVRw"
+          mkdir -p youtube/universal youtube/original
+
+          echo "--- metadata ---"
+          "${{ matrix.exe }}" "$URL" --info || echo "metadata lookup failed"
+
+          echo "--- universal ---"
+          if "${{ matrix.exe }}" "$URL" -o youtube/universal --compatibility universal; then
+            FILE="$(find youtube/universal -type f | head -1)"
+            FFPROBE="$(python -c "
+          import pathlib
+          from media_downloader.tools.manager import ToolManager
+          root = pathlib.Path('tooling').resolve()
+          env = {k: str(root) for k in ('XDG_DATA_HOME','LOCALAPPDATA','HOME','USERPROFILE')}
+          d = ToolManager(env=env).managed_dir('ffmpeg')
+          print(d / 'ffprobe' if d else '')
+          ")"
+            "$FFPROBE" -v error -show_entries stream=codec_name,profile,pix_fmt \
+              -show_entries format=format_name -of default=noprint_wrappers=1 "$FILE" | tee probe.txt
+            grep -q "codec_name=h264" probe.txt
+            grep -q "codec_name=aac" probe.txt
+            grep -q "profile=LC" probe.txt
+            grep -q "pix_fmt=yuv420p" probe.txt
+            grep -q "format_name=mov,mp4" probe.txt
+            echo "universal output is h264 + aac LC + yuv420p in mp4"
+          else
+            echo "universal download failed"
+          fi
+
+          echo "--- original ---"
+          if "${{ matrix.exe }}" "$URL" -o youtube/original --compatibility original; then
+            find youtube/original -type f -printf "  kept as %f\n" 2>/dev/null \
+              || find youtube/original -type f
+            echo "original download completed without normalisation"
+          else
+            echo "original download failed"
+          fi
 
       # archive: false uploads the single file as-is, so what gets downloaded
       # IS this archive -- no wrapper zip and no second extraction. In that

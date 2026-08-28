@@ -7,16 +7,21 @@
 
 ## What changed since the last round
 
-**Managed downloads failed on your Windows machine and now should not.** Both FFmpeg and Deno died
-with `CERTIFICATE_VERIFY_FAILED`. The packaging was fine and the machine was fine: yt-dlp reached
-YouTube from that same application, because it asks for certifi's certificate bundle, while our
-downloader asked for nothing and fell back to whatever roots Windows had cached. Windows fills that
-store lazily, and both download hosts now use roots added recently. Managed downloads now trust the
-platform's roots **and** certifi's, so a private company root still works and a missing public one
-no longer stops the download.
+**Managed FFmpeg and Deno now install on your Windows machine** — that was verified on real
+hardware and is closed. This round is about what happened next.
 
-That is the one thing this build needs you to re-test, on the same machine, still without
-installing FFmpeg or Deno by hand.
+**A YouTube download still failed, and was described wrongly.** It reported the media as
+unavailable, suggesting it might be private, removed, age-restricted, region-locked or
+DRM-protected. yt-dlp had said none of that: it said no format matched the request. That
+misclassification is fixed, so a format problem now says it is a format problem.
+
+Three other things changed with it: the selector is a chain of candidates rather than one demand,
+so a quality cap that cannot be met falls back to the lowest available instead of failing; a video
+with no usable audio downloads and says it has no sound; and **yt-dlp's own messages now go into the
+log**, which is what was missing last time — the reason formats were skipped had been written to a
+stderr that a windowed build discards.
+
+If the same URL still fails, the support report will now contain yt-dlp's own explanation.
 
 ## What CI has and has not shown
 
@@ -132,10 +137,9 @@ Get-FileHash Media-Downloader-Windows-x64-windowed.zip -Algorithm SHA256
       certificate error.
 - [ ] **Deno is initially unavailable**, then **install it through the interface** too. Same
       requirement: verified HTTPS, checksum, extract, available.
-- [ ] **Retry the exact YouTube URL that previously said "Requested format is not available."**
-      That failure happened with no JavaScript runtime installed, so it may simply have been a
-      consequence of the missing Deno. If it still fails now that Deno works, say so — it is then
-      a separate problem and will be treated as one.
+- [ ] **Retry the exact YouTube URL that failed**, in both Universal and Original. If it still
+      fails, the message must no longer claim the media is private or region-locked, and the
+      support report should now contain yt-dlp's own reason — please send it.
 - [ ] Download an **Instagram** item
 - [ ] Download an **X/Twitter** item
 - [ ] Download a **YouTube** item

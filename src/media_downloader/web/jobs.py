@@ -186,6 +186,10 @@ class Job:
     #: What the processing phase is currently doing, in plain words. None until
     #: a postprocessor that takes real time starts.
     stage: str | None = None
+    #: Plain sentences about anything surprising in the result -- a file with
+    #: no sound, or a quality cap that could not be honoured. Empty is the
+    #: ordinary case.
+    notes: tuple[str, ...] = ()
     result_path: Path | None = None
     error: JobError | None = None
     created_at: float = field(default_factory=time.time)
@@ -199,6 +203,7 @@ class Job:
             "id": self.id,
             "state": self.state.value,
             "stage": self.stage,
+            "notes": list(self.notes),
             "url": self.request.url,
             "title": self.title,
             "audio_only": self.request.audio_only,
@@ -357,6 +362,8 @@ class JobManager:
             if job.progress.total_bytes:
                 job.progress = replace(job.progress, downloaded_bytes=job.progress.total_bytes)
             job.progress = replace(job.progress, filename=result.path.name)
+            if result.outcome is not None:
+                job.notes = tuple(result.outcome.notices())
             # A finished job is not in a stage any more.
             job.stage = None
             self._release_locked(job)
@@ -366,6 +373,9 @@ class JobManager:
             service=result.info.extractor,
             media_id=result.info.media_id,
             filename=result.path.name,
+            quality=job.request.quality,
+            compatibility=job.request.compatibility.value,
+            selection=result.outcome.selection if result.outcome else None,
         )
 
     def _fail(self, job: Job, error: JobError) -> None:

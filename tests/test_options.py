@@ -14,39 +14,59 @@ from media_downloader.jsruntime import JSRuntimeStatus
 from media_downloader.naming import AUTO_OUTPUT_TEMPLATE
 from media_downloader.options import (
     FORMAT_BEST_AUDIO,
-    FORMAT_PROGRESSIVE,
     UNIVERSAL_FORMAT_SORT,
     build_format_selector,
     build_info_opts,
     build_ydl_opts,
+    format_selector_steps,
 )
 
 
 @pytest.mark.parametrize(
     ("quality", "expected"),
     [
-        ("best", "bv*+ba/b"),
-        ("worst", "wv*+wa/w"),
-        ("2160", "bv*[height<=?2160]+ba/b[height<=?2160]/b"),
-        ("1080", "bv*[height<=?1080]+ba/b[height<=?1080]/b"),
-        ("360", "bv*[height<=?360]+ba/b[height<=?360]/b"),
+        ("best", "bv*+ba/b/bv*"),
+        ("worst", "wv*+wa/w/wv*"),
+        (
+            "2160",
+            "bv*[height<=?2160]+ba/b[height<=?2160]/bv*[height<=?2160]/wv*+wa/w/wv*",
+        ),
+        (
+            "360",
+            "bv*[height<=?360]+ba/b[height<=?360]/bv*[height<=?360]/wv*+wa/w/wv*",
+        ),
     ],
 )
-def test_selector_merges_streams_when_ffmpeg_is_available(quality: str, expected: str) -> None:
+def test_the_selector_is_a_chain_not_a_single_demand(quality: str, expected: str) -> None:
+    """Each step is tried in turn, so one unavailable combination is not fatal."""
     assert build_format_selector(quality, ffmpeg_available=True) == expected
 
 
 @pytest.mark.parametrize("quality", ["best", "worst", "2160", "1080", "360"])
-def test_selector_avoids_merging_without_ffmpeg(quality: str) -> None:
-    """Without FFmpeg only pre-merged (progressive) formats may be selected."""
+def test_nothing_is_merged_without_ffmpeg(quality: str) -> None:
+    """Without FFmpeg no step may ask for two streams to be combined.
+
+    Video-only is still allowed: a single stream needs no merging, and a silent
+    file the user is told about beats refusing to download at all.
+    """
     selector = build_format_selector(quality, ffmpeg_available=False)
     assert "+" not in selector
-    assert "bv*" not in selector
-    assert "wv*" not in selector
 
 
-def test_selector_still_respects_the_height_cap_without_ffmpeg() -> None:
-    assert build_format_selector("720", ffmpeg_available=False) == "b[height<=?720]/b"
+def test_a_height_cap_still_applies_without_ffmpeg() -> None:
+    assert (
+        build_format_selector("720", ffmpeg_available=False)
+        == "b[height<=?720]/bv*[height<=?720]/w/wv*"
+    )
+
+
+def test_every_chain_ends_in_something_reachable() -> None:
+    """The old chain ended at `b` -- a single file holding video and audio --
+    which measured zero times on real YouTube videos. A last step that never
+    matches is not a fallback."""
+    for quality in ("best", "worst", "1080"):
+        steps = format_selector_steps(quality, ffmpeg_available=True)
+        assert steps[-1] in {"bv*", "wv*"}
 
 
 def test_video_options_use_the_output_directory(
@@ -54,7 +74,7 @@ def test_video_options_use_the_output_directory(
 ) -> None:
     request = request_factory(quality="1080")
     opts = build_ydl_opts(request, ffmpeg_present)
-    assert opts["format"] == "bv*[height<=?1080]+ba/b[height<=?1080]/b"
+    assert opts["format"] == build_format_selector("1080", ffmpeg_available=True)
     assert opts["paths"]["home"] == str(request.output_dir)
     # Relative template + paths.home, so yt-dlp does not ignore "paths".
     assert opts["outtmpl"]["default"] == AUTO_OUTPUT_TEMPLATE
@@ -282,7 +302,7 @@ def test_original_mode_still_works_without_ffmpeg() -> None:
     opts = build_ydl_opts(
         _request(compatibility=CompatibilityMode.ORIGINAL), FFmpegStatus(None, None)
     )
-    assert opts["format"] == FORMAT_PROGRESSIVE
+    assert opts["format"] == build_format_selector("best", ffmpeg_available=False)
 
 
 def test_audio_downloads_are_untouched_by_video_compatibility() -> None:

@@ -112,6 +112,12 @@ function renderStatus() {
     el.status.classList.add('status--done');
     el.status.innerHTML = '';
     el.status.append(row('Done', ''), text('status__name', job.result?.filename || name));
+    // Anything surprising about what arrived: a file with no sound, or a
+    // quality cap that could not be honoured. Saying nothing would leave the
+    // user to discover it themselves.
+    for (const note of job.notes || []) {
+      el.status.append(text('status__hint', note));
+    }
     return;
   }
   if (job.state === 'failed') {

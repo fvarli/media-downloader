@@ -377,3 +377,146 @@ def test_a_user_supplied_filename_still_suppresses_automatic_naming(tmp_path: Pa
     )
     assert not any("AutoName" in entry for entry in attached)
     assert any("UniversalCompatibility" in entry for entry in attached)
+
+
+# -- what the user is told when no format matched ------------------------
+#
+# A real YouTube download failed with "Requested format is not available" and
+# was reported as MEDIA_UNAVAILABLE, telling the owner the video might be
+# private, removed, age-restricted, region-locked or DRM-protected. yt-dlp had
+# said none of those things.
+
+
+def test_a_format_failure_is_not_reported_as_inaccessible_media() -> None:
+    from yt_dlp.utils import DownloadError
+
+    from media_downloader.downloader import _classify_download_error
+    from media_downloader.errors import MediaUnavailableError, NoFormatMatchError
+
+    error = _classify_download_error(
+        DownloadError("ERROR: [youtube] abc: Requested format is not available. Use --list-formats")
+    )
+    assert isinstance(error, NoFormatMatchError)
+    assert not isinstance(error, MediaUnavailableError)
+
+
+def test_the_format_message_never_claims_a_restriction() -> None:
+    from yt_dlp.utils import DownloadError
+
+    from media_downloader.downloader import _classify_download_error
+
+    error = _classify_download_error(DownloadError("Requested format is not available"))
+    said = f"{error.message} {error.hint}".lower()
+    for claim in ("private", "drm", "region", "age-restricted", "removed"):
+        assert claim not in said, claim
+
+
+def test_the_format_message_suggests_something_that_might_work() -> None:
+    from yt_dlp.utils import DownloadError
+
+    from media_downloader.downloader import _classify_download_error
+
+    error = _classify_download_error(DownloadError("Requested format is not available"))
+    assert "best" in str(error.hint).lower()
+
+
+def test_the_exit_code_is_unchanged_by_the_new_class() -> None:
+    """A more precise error must not quietly change the CLI contract."""
+    from media_downloader.errors import DownloadFailedError, NoFormatMatchError
+
+    assert NoFormatMatchError("x").exit_code == DownloadFailedError("x").exit_code
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "ERROR: [youtube] abc: Private video. Sign in if you've been granted access",
+        "ERROR: [youtube] abc: Video unavailable",
+        "This video is DRM protected",
+    ],
+)
+def test_genuinely_inaccessible_media_is_still_reported_as_such(message: str) -> None:
+    """Correcting one misclassification must not lose the true ones."""
+    from yt_dlp.utils import DownloadError
+
+    from media_downloader.downloader import _classify_download_error
+    from media_downloader.errors import MediaUnavailableError
+
+    assert isinstance(_classify_download_error(DownloadError(message)), MediaUnavailableError)
+
+
+# -- telling the user what actually arrived ------------------------------
+
+
+def _outcome(info: dict[str, Any], quality: str = "best") -> Any:
+    from media_downloader.config import build_request
+    from media_downloader.downloader import Downloader
+
+    request = build_request(url="https://x.com/a/status/1", output="/tmp/o", quality=quality)
+    return Downloader._describe_selection(info, request)
+
+
+def test_an_ordinary_download_says_nothing_surprising() -> None:
+    outcome = _outcome(
+        {
+            "requested_formats": [
+                {"vcodec": "avc1", "acodec": "none", "height": 1080},
+                {"vcodec": "none", "acodec": "mp4a"},
+            ]
+        }
+    )
+    assert outcome.selection == "video_plus_audio"
+    assert outcome.notices() == []
+
+
+def test_a_silent_file_is_never_handed_over_silently() -> None:
+    outcome = _outcome({"requested_formats": [{"vcodec": "vp9", "acodec": "none", "height": 1080}]})
+    assert outcome.selection == "fallback_video_only"
+    assert any("without audio" in note for note in outcome.notices())
+
+
+def test_a_muxed_result_is_recognised() -> None:
+    outcome = _outcome({"vcodec": "avc1", "acodec": "mp4a", "height": 360})
+    assert outcome.selection == "muxed"
+    assert outcome.notices() == []
+
+
+def test_a_cap_that_could_not_be_honoured_is_stated() -> None:
+    outcome = _outcome(
+        {
+            "requested_formats": [
+                {"vcodec": "avc1", "acodec": "none", "height": 1080},
+                {"vcodec": "none", "acodec": "mp4a"},
+            ]
+        },
+        quality="360",
+    )
+    assert outcome.cap_exceeded is True
+    assert any("360p was not available" in note for note in outcome.notices())
+
+
+def test_a_cap_that_was_honoured_says_nothing() -> None:
+    outcome = _outcome(
+        {
+            "requested_formats": [
+                {"vcodec": "avc1", "acodec": "none", "height": 720},
+                {"vcodec": "none", "acodec": "mp4a"},
+            ]
+        },
+        quality="1080",
+    )
+    assert outcome.cap_exceeded is False
+    assert outcome.notices() == []
+
+
+def test_best_quality_never_reports_an_exceeded_cap() -> None:
+    """ "best" is not a number, so there is no cap to exceed."""
+    outcome = _outcome(
+        {
+            "requested_formats": [
+                {"vcodec": "avc1", "acodec": "none", "height": 2160},
+                {"vcodec": "none", "acodec": "mp4a"},
+            ]
+        }
+    )
+    assert outcome.cap_exceeded is False

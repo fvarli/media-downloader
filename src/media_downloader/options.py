@@ -13,41 +13,75 @@ from media_downloader.config import DownloadRequest
 from media_downloader.errors import FFmpegRequiredError
 from media_downloader.ffmpeg import FFMPEG_GUIDANCE, FFmpegStatus
 from media_downloader.jsruntime import JSRuntimeStatus, js_runtimes_option
+from media_downloader.logging_setup import get_logger
 from media_downloader.naming import AUTO_OUTPUT_TEMPLATE
 
 # Best video plus best audio, falling back to the best single stream.
-FORMAT_BEST = "bv*+ba/b"
-FORMAT_WORST = "wv*+wa/w"
-# Progressive only: a single file that already contains both video and audio,
-# so nothing has to be merged. Used when FFmpeg is unavailable.
-FORMAT_PROGRESSIVE = "b"
+#: A chain, not one selector. Every step is tried in order and the first that
+#: matches wins.
+#:
+#: The old chain ended at ``b`` -- a single format holding both video and audio
+#: -- which sounds like a safety net and is not one on YouTube: measured
+#: against real videos, it returns *zero* muxed formats. So the chain collapsed
+#: to "video plus audio, or fail", and one missing audio stream was fatal even
+#: though a perfectly good video stream was sitting there.
+logger = get_logger("ytdlp")
+
 FORMAT_BEST_AUDIO = "ba/b"
 
 #: Resolution and frame rate decide first; a compatible codec is only a
 #: tie-breaker. So a 2160p H.264 stream wins over 2160p VP9 -- a free remux
 #: instead of an encode -- while 2160p that exists *only* as VP9 still beats
-#: 1080p H.264. Quality is never traded away to avoid a transcode; the file is
-#: normalised afterwards instead. Verified against yt-dlp's own FormatSorter.
+#: 1080p H.264. This is a sort, never a filter: it changes the order of the
+#: candidates and can never make one unavailable.
 UNIVERSAL_FORMAT_SORT: tuple[str, ...] = ("res", "fps", "vcodec:h264", "acodec:aac")
+
+#: Video and its audio, merged. The normal path everywhere.
+_VIDEO_WITH_AUDIO = "bv*+ba"
+_WORST_VIDEO_WITH_AUDIO = "wv*+wa"
+#: One file already containing both. Rare on YouTube, ordinary elsewhere.
+_MUXED = "b"
+_WORST_MUXED = "w"
+#: Video alone. A silent file is a poor result, but it is a result, and the
+#: user is told plainly that it has no sound rather than left to discover it.
+_VIDEO_ONLY = "bv*"
+_WORST_VIDEO_ONLY = "wv*"
+
+
+def _capped(selector: str, height: str) -> str:
+    """Apply a height cap. ``<=?`` keeps formats that report no height at all."""
+    if "+" in selector:
+        video, audio = selector.split("+", 1)
+        return f"{video}[height<=?{height}]+{audio}"
+    return f"{selector}[height<=?{height}]"
+
+
+def format_selector_steps(quality: str, *, ffmpeg_available: bool) -> tuple[str, ...]:
+    """The ordered candidates for a video download.
+
+    Without FFmpeg nothing can be merged, so the steps that would need a merge
+    are simply absent rather than offered and then failed at.
+    """
+    merged = [_VIDEO_WITH_AUDIO] if ffmpeg_available else []
+    worst_merged = [_WORST_VIDEO_WITH_AUDIO] if ffmpeg_available else []
+
+    if quality == "best":
+        return (*merged, _MUXED, _VIDEO_ONLY)
+    if quality == "worst":
+        return (*worst_merged, _WORST_MUXED, _WORST_VIDEO_ONLY)
+
+    # A cap is an upper bound first: asking for 1080 where only 720 exists
+    # gives 720. Where nothing at all fits under the cap, the smallest
+    # available stream is taken rather than refusing outright -- somebody who
+    # asked for 360p wants a small file, not an error -- and they are told the
+    # cap could not be honoured.
+    capped = [_capped(step, quality) for step in (*merged, _MUXED, _VIDEO_ONLY)]
+    return (*capped, *worst_merged, _WORST_MUXED, _WORST_VIDEO_ONLY)
 
 
 def build_format_selector(quality: str, *, ffmpeg_available: bool) -> str:
-    """Build the yt-dlp format selector for a video download.
-
-    Without FFmpeg, separate video and audio streams cannot be merged, so the
-    selector is restricted to progressive formats. This keeps the download
-    working at reduced quality instead of failing at the merge step.
-    """
-    if not ffmpeg_available:
-        if quality in {"best", "worst"}:
-            return FORMAT_PROGRESSIVE if quality == "best" else "w"
-        return f"b[height<=?{quality}]/b"
-
-    if quality == "best":
-        return FORMAT_BEST
-    if quality == "worst":
-        return FORMAT_WORST
-    return f"bv*[height<=?{quality}]+ba/b[height<=?{quality}]/b"
+    """Build the yt-dlp format selector for a video download."""
+    return "/".join(format_selector_steps(quality, ffmpeg_available=ffmpeg_available))
 
 
 def build_audio_postprocessors(audio_format: str) -> list[dict[str, Any]]:
@@ -59,6 +93,45 @@ def build_audio_postprocessors(audio_format: str) -> list[dict[str, Any]]:
     # preferredquality is deliberately omitted: yt-dlp then derives the bitrate
     # from the source stream instead of forcing a fixed one.
     return [{"key": "FFmpegExtractAudio", "preferredcodec": audio_format}]
+
+
+class _YtdlpLog:
+    """Routes yt-dlp's own messages into our log.
+
+    Without this they go to stderr, which a windowed build discards -- so when
+    a real download failed with "Requested format is not available", the one
+    thing that would have explained *why* formats were unusable had already
+    been thrown away. Warnings are the valuable half: yt-dlp says there when it
+    skips formats and what forced it.
+
+    Everything passes through the same redacting filter as the rest of the log.
+    """
+
+    def __init__(self, logger: Any) -> None:
+        self._logger = logger
+
+    def debug(self, message: str) -> None:
+        # yt-dlp routes ordinary output here too, prefixed when it is genuinely
+        # debug. Only the noisy half is dropped.
+        if message.startswith("[debug] "):
+            self._logger.debug("yt-dlp %s", message[8:])
+        else:
+            self._logger.debug("yt-dlp %s", message)
+
+    def info(self, message: str) -> None:
+        self._logger.debug("yt-dlp %s", message)
+
+    def warning(self, message: str) -> None:
+        self._logger.warning("yt-dlp %s", message)
+
+    def error(self, message: str) -> None:
+        self._logger.error("yt-dlp %s", message)
+
+
+#: Stateless, so one instance is shared. Building it per call would make
+#: build_ydl_opts impure -- the options dict would differ between two calls
+#: with identical inputs, which a test rightly objects to.
+_YTDLP_LOG = _YtdlpLog(logger)
 
 
 def build_ydl_opts(
@@ -118,6 +191,9 @@ def build_ydl_opts(
         "no_warnings": False,
         "noprogress": True,
         "consoletitle": False,
+        # yt-dlp's own account of what it did, in our log rather than a
+        # discarded stderr.
+        "logger": _YTDLP_LOG,
         "ignoreerrors": False,
         "retries": 5,
         "fragment_retries": 5,

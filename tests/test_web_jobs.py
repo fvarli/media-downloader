@@ -56,6 +56,7 @@ class FakeDownloader:
         progress_hook: Any = None,
         postprocessor_hook: Any = None,
         block: threading.Event | None = None,
+        outcome: Any = None,
     ) -> None:
         self.result_path = result_path
         self.error = error
@@ -64,6 +65,7 @@ class FakeDownloader:
         self.progress_hook = progress_hook
         self.postprocessor_hook = postprocessor_hook
         self.block = block
+        self.outcome = outcome
 
     def download(self, request: Any) -> DownloadResult:
         for event in self.events:
@@ -77,7 +79,7 @@ class FakeDownloader:
         if self.error is not None:
             raise self.error
         assert self.result_path is not None
-        return DownloadResult(path=self.result_path, info=SAMPLE_INFO)
+        return DownloadResult(path=self.result_path, info=SAMPLE_INFO, outcome=self.outcome)
 
 
 def manager_for(**kwargs: Any) -> tuple[JobManager, list[FakeDownloader]]:
@@ -724,3 +726,25 @@ def test_the_stage_reaches_the_interface(request_for: Any, tmp_path: Path) -> No
     release.set()
     wait_until_done(manager, job.id)
     assert seen == "Optimising compatibility"
+
+
+def test_a_result_note_reaches_the_interface(request_for: Any, tmp_path: Path) -> None:
+    """A file with no sound must not arrive looking like an ordinary one."""
+    from media_downloader.downloader import SelectionOutcome
+
+    outcome = SelectionOutcome(
+        selection="fallback_video_only", has_audio=False, height=1080, requested_quality="best"
+    )
+    manager, _ = manager_for(result_path=tmp_path / "v.mp4", outcome=outcome)
+    job = manager.submit(request_for("https://x.com/a/status/1"))
+    finished = wait_until_done(manager, job.id)
+
+    assert any("without audio" in note for note in finished.notes)
+    assert any("without audio" in note for note in finished.snapshot()["notes"])
+
+
+def test_an_ordinary_result_carries_no_notes(request_for: Any, tmp_path: Path) -> None:
+    manager, _ = manager_for(result_path=tmp_path / "v.mp4")
+    job = manager.submit(request_for("https://x.com/a/status/1"))
+    finished = wait_until_done(manager, job.id)
+    assert finished.snapshot()["notes"] == []

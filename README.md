@@ -379,7 +379,7 @@ operating systems.
 | --- | --- |
 | `URL` | Required. The public `http(s)` URL of the media. |
 | `-o`, `--output DIR` | Directory to save into. Default: `./downloads`. |
-| `-q`, `--quality` | `best`, `2160`, `1440`, `1080`, `720`, `480`, `360`, or `worst`. Default: `best`. Numeric values are an upper bound on height. |
+| `-q`, `--quality` | `best`, `2160`, `1440`, `1080`, `720`, `480`, `360`, or `worst`. Default: `best`. Numeric values are an upper bound on height; if nothing exists below the bound, the lowest available is downloaded and you are told. |
 | `--compatibility` | `universal` or `original`. Default: `original` on the command line, `universal` in the web interface. See [Playback compatibility](#playback-compatibility). |
 | `--audio` | Download audio only. |
 | `--audio-format` | `best`, `mp3`, `m4a`, `opus`, `flac`, `wav`. Default: `best`, which keeps the original stream without re-encoding. Any other value requires FFmpeg. |
@@ -435,6 +435,26 @@ natively; `libx264` reaches a given quality in fewer bits.
 Today's behaviour, unchanged: the source codecs are kept, which is what you want when archiving at
 maximum quality. The result may be VP9, AV1 or another modern codec, and **native playback is not
 guaranteed** — particularly in Apple and Windows players.
+
+### When the requested quality or format is unavailable
+
+Format availability differs by site and by video, so selection is a chain of candidates rather than
+one demand: video plus audio, then a single file already containing both, then video alone. The
+first that matches wins.
+
+Two of those outcomes are worth stating plainly, and the application says so rather than leaving
+them to be discovered:
+
+- **A video with no usable audio still downloads**, and the result says it has no sound. Refusing a
+  perfectly good video stream because no audio accompanies it would be worse.
+- **A quality cap is an upper bound.** Asking for 1080p where only 720p exists gives 720p. Where
+  nothing at all exists below the cap, the lowest available is downloaded and the result says the
+  cap could not be honoured — somebody asking for 360p wants a small file, not an error.
+
+When genuinely nothing matches, the error says so: *"No downloadable format matched the selected
+quality/options."* That is a statement about the request, not about the media, and it is kept
+separate from the case where a video really is private, removed, age-restricted, region-locked or
+DRM-protected.
 
 ### Automatic file names
 

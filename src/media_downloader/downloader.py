@@ -21,6 +21,7 @@ from media_downloader.config import DownloadRequest
 from media_downloader.errors import (
     DownloadFailedError,
     MediaUnavailableError,
+    NoFormatMatchError,
     OutputError,
 )
 from media_downloader.ffmpeg import FFmpegStatus
@@ -40,7 +41,6 @@ _UNAVAILABLE_MARKERS: tuple[str, ...] = (
     "this video is private",
     "sign in to confirm",
     "login required",
-    "requested format is not available",
     "video unavailable",
     "removed by the uploader",
     "account has been terminated",
@@ -103,11 +103,52 @@ class MediaInfo:
 
 
 @dataclass(frozen=True)
+class SelectionOutcome:
+    """Which branch of the format chain actually produced the file.
+
+    Recorded rather than inferred later, because two of the branches are
+    fallbacks the user deserves to know about: a file with no sound, and a
+    quality cap that could not be honoured. Silence about either would be the
+    kind of surprise this project keeps trying to avoid.
+    """
+
+    #: A short, stable label for diagnostics.
+    selection: str
+    has_audio: bool
+    height: int | None
+    requested_quality: str
+
+    @property
+    def cap_exceeded(self) -> bool:
+        """True when a numeric cap was asked for and the result is above it."""
+        if not self.requested_quality.isdigit() or self.height is None:
+            return False
+        return self.height > int(self.requested_quality)
+
+    def notices(self) -> list[str]:
+        """Plain sentences for the interface. Empty when nothing surprising
+        happened, which is the ordinary case."""
+        messages: list[str] = []
+        if not self.has_audio:
+            messages.append(
+                "Downloaded video without audio, because no usable audio stream "
+                "was available for this item."
+            )
+        if self.cap_exceeded:
+            messages.append(
+                f"{self.requested_quality}p was not available. Downloaded the "
+                f"lowest available quality: {self.height}p."
+            )
+        return messages
+
+
+@dataclass(frozen=True)
 class DownloadResult:
     """Outcome of a successful download."""
 
     path: Path
     info: MediaInfo
+    outcome: SelectionOutcome | None = None
 
 
 def _make_auto_name_postprocessor() -> Any:
@@ -170,10 +211,27 @@ def _default_factory(opts: dict[str, Any]) -> YoutubeDLLike:
     return YoutubeDL(opts)  # type: ignore[no-any-return]
 
 
+#: yt-dlp's wording when the format selector matched nothing. It says nothing
+#: about whether the media is accessible, and used to be read as though it did.
+_NO_FORMAT_MARKERS: tuple[str, ...] = (
+    "requested format is not available",
+    "requested format not available",
+)
+
+
 def _classify_download_error(exc: Exception) -> Exception:
     """Translate a yt-dlp error into this project's exception hierarchy."""
     message = str(exc)
     haystack = message.lower()
+
+    if any(marker in haystack for marker in _NO_FORMAT_MARKERS):
+        return NoFormatMatchError(
+            "No downloadable format matched the selected quality/options.",
+            hint=(
+                "This is about the requested quality, not about access to the "
+                "media. Try Best quality, or the other compatibility mode."
+            ),
+        )
 
     if any(marker in haystack for marker in _UNAVAILABLE_MARKERS):
         return MediaUnavailableError(
@@ -303,7 +361,42 @@ class Downloader:
 
         info = self._extract(opts, request.url, download=True, setup=setup)
         path = self._resolve_final_path(info, final_paths, request)
-        return DownloadResult(path=path, info=MediaInfo.from_info_dict(info))
+        outcome = self._describe_selection(info, request)
+        if outcome.selection.startswith("fallback") or outcome.cap_exceeded:
+            logger.info(
+                "selection=%s audio=%s height=%s requested_quality=%s",
+                outcome.selection,
+                "available" if outcome.has_audio else "unavailable",
+                outcome.height,
+                outcome.requested_quality,
+            )
+        return DownloadResult(path=path, info=MediaInfo.from_info_dict(info), outcome=outcome)
+
+    @staticmethod
+    def _describe_selection(info: dict[str, Any], request: DownloadRequest) -> SelectionOutcome:
+        """Read what was chosen from yt-dlp's own answer, not from a guess."""
+        merged = info.get("requested_formats") or []
+        if merged:
+            has_audio = any(f.get("acodec") not in (None, "none") for f in merged)
+            height = max((f.get("height") or 0) for f in merged) or None
+            selection = "video_plus_audio" if has_audio else "fallback_video_only"
+        else:
+            has_audio = info.get("acodec") not in (None, "none")
+            height = info.get("height")
+            has_video = info.get("vcodec") not in (None, "none")
+            if has_video and has_audio:
+                selection = "muxed"
+            elif has_video:
+                selection = "fallback_video_only"
+            else:
+                selection = "audio_only"
+
+        return SelectionOutcome(
+            selection=selection,
+            has_audio=bool(has_audio),
+            height=height,
+            requested_quality=request.quality,
+        )
 
     @staticmethod
     def _resolve_final_path(

@@ -57,6 +57,19 @@ class DownloadFailedError(MediaDownloaderError):
     exit_code = ExitCode.DOWNLOAD_FAILED
 
 
+class NoFormatMatchError(DownloadFailedError):
+    """No available format satisfied the requested quality and options.
+
+    Deliberately separate from MediaUnavailableError. yt-dlp saying "Requested
+    format is not available" is a statement about *our* selection, not about
+    the media's accessibility -- and reporting it as private, removed,
+    age-restricted, region-locked or DRM-protected told a user something
+    untrue about a video that was none of those things.
+
+    Subclasses DownloadFailedError so the process exit code is unchanged.
+    """
+
+
 class MediaUnavailableError(MediaDownloaderError):
     """The media exists but is not publicly accessible to this user.
 
