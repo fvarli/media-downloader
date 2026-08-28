@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 from yt_dlp.utils import DownloadError, ExtractorError, UnsupportedError
@@ -309,6 +309,11 @@ def _registered(request: Any) -> list[str]:
     attached: list[str] = []
 
     class Recording:
+        # A postprocessor bound to this object reads its options to find
+        # FFmpeg, the way yt-dlp's own `params` does. Empty is enough: this
+        # test is about which processors get attached, not about FFmpeg.
+        params: ClassVar[dict[str, Any]] = {}
+
         def add_post_processor(self, pp: Any, when: str = "post_process") -> None:
             attached.append(f"{type(pp).__name__}@{when}")
 
@@ -520,3 +525,81 @@ def test_best_quality_never_reports_an_exceeded_cap() -> None:
         }
     )
     assert outcome.cap_exceeded is False
+
+
+# -- a conversion that failed after the media arrived ---------------------
+#
+# Universal downloaded a real video on the owner's Windows machine and then
+# failed in postprocessing, because the normaliser could not find the managed
+# ffprobe. The message said "The download failed", while a complete, playable
+# file sat in the downloads folder -- so the report and the disk disagreed.
+
+
+def test_a_failed_conversion_is_not_reported_as_a_failed_download() -> None:
+    from yt_dlp.utils import DownloadError
+
+    from media_downloader.downloader import _classify_download_error
+    from media_downloader.errors import CompatibilityConversionError
+
+    error = _classify_download_error(
+        DownloadError("Postprocessing: ffprobe not found. Please install or provide the path"),
+        universal=True,
+    )
+    assert isinstance(error, CompatibilityConversionError)
+
+
+def test_the_conversion_message_accounts_for_the_file_on_disk() -> None:
+    """The user can see the file. Saying nothing about it is what confused."""
+    from yt_dlp.utils import DownloadError
+
+    from media_downloader.downloader import _classify_download_error
+
+    error = _classify_download_error(
+        DownloadError("Postprocessing: ffprobe not found"), universal=True
+    )
+    said = f"{error.message} {error.hint}".lower()
+    assert "downloaded" in said
+    assert "kept" in said
+    assert "original" in said
+
+
+def test_a_failed_audio_conversion_is_not_called_a_compatibility_problem() -> None:
+    """Audio extraction is a postprocessor too, and Universal is about video.
+
+    Describing a failed MP3 conversion as a playback-compatibility failure
+    would be the same shape of confident wrong answer as the one this fixes.
+    """
+    from yt_dlp.utils import DownloadError
+
+    from media_downloader.downloader import _classify_download_error
+    from media_downloader.errors import CompatibilityConversionError
+
+    error = _classify_download_error(
+        DownloadError("Postprocessing: audio conversion failed"), universal=False
+    )
+    assert not isinstance(error, CompatibilityConversionError)
+
+
+def test_a_conversion_failure_keeps_the_exit_code() -> None:
+    from media_downloader.errors import CompatibilityConversionError, DownloadFailedError
+
+    assert CompatibilityConversionError("x").exit_code == DownloadFailedError("x").exit_code
+
+
+@pytest.mark.parametrize(
+    ("exc_name", "code"),
+    [
+        ("NoFormatMatchError", "FORMAT_UNAVAILABLE"),
+        ("CompatibilityConversionError", "COMPATIBILITY_CONVERSION_FAILED"),
+    ],
+)
+def test_the_support_log_can_tell_the_two_apart(exc_name: str, code: str) -> None:
+    """Both are download failures; the log line is what support reads.
+
+    Left as plain DOWNLOAD_FAILED, a finished file on disk and an empty
+    downloads folder produce the same record.
+    """
+    import media_downloader.errors as errors_module
+    from media_downloader.web.jobs import _error_code
+
+    assert _error_code(getattr(errors_module, exc_name)("x")) == code

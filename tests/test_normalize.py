@@ -22,6 +22,20 @@ from media_downloader.normalize import TEMP_SUFFIX, make_universal_postprocessor
 MP4_FORMAT = "mov,mp4,m4a,3gp,3g2,mj2"
 
 
+def stub_ydl(**params: Any) -> Any:
+    """A downloader for the postprocessor to be built against.
+
+    The real class rather than a stand-in: a postprocessor reads more of its
+    downloader than the options mapping -- progress reporting reaches for
+    ``to_console_title`` -- and faking that surface would only pin our guess at
+    it. These tests replace FFmpeg and ffprobe on the instance, so which binary
+    gets resolved does not matter here; that is test_ffmpeg_binding.py.
+    """
+    from yt_dlp import YoutubeDL
+
+    return YoutubeDL({"quiet": True, "noprogress": True, **params})
+
+
 def probe_json(video: str = "h264", audio: str | None = "aac", profile: str = "LC") -> dict:
     streams: list[dict[str, Any]] = [
         {"codec_type": "video", "codec_name": video, "pix_fmt": "yuv420p"}
@@ -35,7 +49,7 @@ class Harness:
     """A postprocessor with FFmpeg and ffprobe replaced."""
 
     def __init__(self, *, before: dict, after: dict, produce: bool = True) -> None:
-        self.pp = make_universal_postprocessor()
+        self.pp = make_universal_postprocessor(stub_ydl())
         self.commands: list[list[str]] = []
         self.outputs: list[Path] = []
         self.produce = produce
@@ -149,7 +163,7 @@ def test_the_conversion_is_written_beside_the_target(tmp_path: Path) -> None:
 
 
 def test_a_missing_file_is_left_alone(tmp_path: Path) -> None:
-    pp = make_universal_postprocessor()
+    pp = make_universal_postprocessor(stub_ydl())
     info: dict[str, Any] = {"filepath": str(tmp_path / "gone.mp4")}
     leftovers, returned = pp.run(info)
     assert leftovers == []
@@ -157,7 +171,7 @@ def test_a_missing_file_is_left_alone(tmp_path: Path) -> None:
 
 
 def test_no_output_path_is_left_alone() -> None:
-    pp = make_universal_postprocessor()
+    pp = make_universal_postprocessor(stub_ydl())
     leftovers, returned = pp.run({})
     assert leftovers == []
     assert returned == {}
@@ -177,7 +191,7 @@ def test_the_encoder_query_survives_having_no_ffmpeg() -> None:
     unreachable in practice -- but it must not raise a TypeError from deep
     inside a postprocessor, which is exactly what it did on all twelve CI
     jobs, since no runner has FFmpeg installed."""
-    pp = make_universal_postprocessor()
+    pp = make_universal_postprocessor(stub_ydl())
     _with_executable(pp, None)
     assert pp._video_encoder() == "libx264"
 
@@ -189,7 +203,7 @@ def test_the_encoder_is_taken_from_the_binarys_own_listing(
     the encoder has to be discovered rather than assumed."""
     import media_downloader.normalize as normalize_module
 
-    pp = make_universal_postprocessor()
+    pp = make_universal_postprocessor(stub_ydl())
     _with_executable(pp, "ffmpeg")
     listing = " V....D libopenh264          OpenH264 H.264 / AVC\n A....D aac  AAC\n"
     monkeypatch.setattr(
@@ -204,7 +218,7 @@ def test_an_ffmpeg_with_no_h264_encoder_is_reported(monkeypatch: pytest.MonkeyPa
     """Better a clear refusal than a conversion that cannot possibly work."""
     import media_downloader.normalize as normalize_module
 
-    pp = make_universal_postprocessor()
+    pp = make_universal_postprocessor(stub_ydl())
     _with_executable(pp, "ffmpeg")
     monkeypatch.setattr(
         normalize_module.subprocess,

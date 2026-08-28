@@ -19,6 +19,7 @@ from typing import Any, Protocol
 
 from media_downloader.config import DownloadRequest
 from media_downloader.errors import (
+    CompatibilityConversionError,
     DownloadFailedError,
     MediaUnavailableError,
     NoFormatMatchError,
@@ -219,10 +220,29 @@ _NO_FORMAT_MARKERS: tuple[str, ...] = (
 )
 
 
-def _classify_download_error(exc: Exception) -> Exception:
+#: yt-dlp prefixes anything raised by a postprocessor with this. By the time
+#: one runs, the media is already downloaded and sitting on disk.
+_POSTPROCESSING_MARKER = "postprocessing:"
+
+
+def _classify_download_error(exc: Exception, *, universal: bool = False) -> Exception:
     """Translate a yt-dlp error into this project's exception hierarchy."""
     message = str(exc)
     haystack = message.lower()
+
+    # Only for Universal video. Audio extraction is a postprocessor too, and
+    # describing a failed MP3 conversion as a playback-compatibility problem
+    # would be the same kind of confident wrong answer this phase is fixing.
+    if universal and _POSTPROCESSING_MARKER in haystack:
+        return CompatibilityConversionError(
+            "The media downloaded, but it could not be converted for universal "
+            f"playback: {message}",
+            hint=(
+                "The downloaded file was kept exactly as the source provided "
+                "it, so it may not play in Apple or Windows players. Original "
+                "quality keeps that same file without attempting conversion."
+            ),
+        )
 
     if any(marker in haystack for marker in _NO_FORMAT_MARKERS):
         return NoFormatMatchError(
@@ -289,6 +309,7 @@ class Downloader:
         *,
         download: bool,
         setup: Callable[[YoutubeDLLike], None] | None = None,
+        universal: bool = False,
     ) -> dict[str, Any]:
         """Run yt-dlp and normalise both its errors and its return value.
 
@@ -308,7 +329,7 @@ class Downloader:
                 hint="Check the URL, or see the yt-dlp supported-sites list.",
             ) from exc
         except (DownloadError, ExtractorError) as exc:
-            raise _classify_download_error(exc) from exc
+            raise _classify_download_error(exc, universal=universal) from exc
         except OSError as exc:
             raise OutputError(f"A filesystem error occurred: {exc}") from exc
 
@@ -359,7 +380,13 @@ class Downloader:
             if request.needs_universal_video:
                 register_universal_compatibility(ydl)
 
-        info = self._extract(opts, request.url, download=True, setup=setup)
+        info = self._extract(
+            opts,
+            request.url,
+            download=True,
+            setup=setup,
+            universal=request.needs_universal_video,
+        )
         path = self._resolve_final_path(info, final_paths, request)
         outcome = self._describe_selection(info, request)
         if outcome.selection.startswith("fallback") or outcome.cap_exceeded:

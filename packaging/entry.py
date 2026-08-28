@@ -154,14 +154,33 @@ def _tls_selftest(url: str) -> int:
 
 
 def _compatibility_selftest(fixture: str) -> int:
-    """Normalise one local file through the packaged pipeline and report."""
+    """Normalise one local file through the packaged pipeline and report.
+
+    Goes through FFmpeg discovery rather than around it. This used to build the
+    postprocessor with no downloader and no location, which meant it found
+    ffmpeg and ffprobe by bare name on PATH -- so it proved the frozen binary
+    could run an FFmpeg somebody else had put there, and said nothing about the
+    managed one. A real Windows machine, with a managed install and no system
+    FFmpeg, failed at the first probe while this gate stayed green.
+    """
     from pathlib import Path
 
+    from yt_dlp import YoutubeDL
+
     from media_downloader.compatibility import MediaProbe, validate_universal
+    from media_downloader.ffmpeg import detect_ffmpeg
     from media_downloader.normalize import make_universal_postprocessor
 
     target = Path(fixture)
-    processor = make_universal_postprocessor()
+
+    status = detect_ffmpeg()
+    if not status.available:
+        print("compatibility self-test FAILED: no FFmpeg was discovered")
+        return 1
+    ydl = YoutubeDL({"quiet": True, "ffmpeg_location": str(status.location)})
+    processor = make_universal_postprocessor(ydl)
+    print(f"discovered ffmpeg:  {processor.executable}")
+    print(f"discovered ffprobe: {processor.probe_executable}")
 
     before = validate_universal(MediaProbe.from_ffprobe(processor.get_metadata_object(str(target))))
     print(f"before: ok={before.ok} {before.as_log_fields()}")

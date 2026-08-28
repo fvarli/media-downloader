@@ -30,11 +30,13 @@ from media_downloader.config import DownloadRequest
 from media_downloader.diagnostics import record_error
 from media_downloader.downloader import DownloadResult
 from media_downloader.errors import (
+    CompatibilityConversionError,
     DownloadFailedError,
     FFmpegRequiredError,
     InvalidURLError,
     MediaDownloaderError,
     MediaUnavailableError,
+    NoFormatMatchError,
     OutputError,
 )
 from media_downloader.logging_setup import get_logger
@@ -137,6 +139,13 @@ _ERROR_CODES: dict[type[MediaDownloaderError], str] = {
     InvalidURLError: "INVALID_URL",
     FFmpegRequiredError: "FFMPEG_REQUIRED",
     DownloadFailedError: "DOWNLOAD_FAILED",
+    # Both are download failures and share its exit code, but they describe
+    # outcomes a support report has to tell apart: nothing matched the
+    # requested quality, versus the media arrived and the conversion after it
+    # did not. Left as plain DOWNLOAD_FAILED, the log line for a file sitting
+    # finished on disk reads as though nothing had been downloaded at all.
+    NoFormatMatchError: "FORMAT_UNAVAILABLE",
+    CompatibilityConversionError: "COMPATIBILITY_CONVERSION_FAILED",
     MediaUnavailableError: "MEDIA_UNAVAILABLE",
     OutputError: "OUTPUT_ERROR",
     DownloadInProgressError: "DOWNLOAD_IN_PROGRESS",

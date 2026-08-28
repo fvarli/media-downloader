@@ -45,8 +45,21 @@ TEMP_SUFFIX = ".compat-tmp.mp4"
 ENCODER_QUERY_TIMEOUT = 60
 
 
-def make_universal_postprocessor() -> Any:
+def make_universal_postprocessor(downloader: Any) -> Any:
     """Build the postprocessor that enforces the universal target.
+
+    ``downloader`` is required, and that is the whole point rather than a
+    convenience. yt-dlp locates ffmpeg and ffprobe once, inside
+    ``FFmpegPostProcessor.__init__``, by reading ``ffmpeg_location`` from the
+    downloader it was given -- and it never recomputes them, because there is
+    no ``set_downloader`` override to do it. A processor built without one
+    therefore falls back permanently to the bare names ``ffmpeg`` and
+    ``ffprobe``, and attaching the downloader afterwards does not repair it.
+
+    That was a real failure: a Windows machine that had just installed the
+    managed FFmpeg through the interface could not find ffprobe, because
+    nothing on its PATH answered to the bare name. Making the argument
+    mandatory is what stops the same processor being built unbound again.
 
     Imported lazily, like the automatic-naming postprocessor, so ``--help`` does
     not pay for yt-dlp's import.
@@ -170,7 +183,7 @@ def make_universal_postprocessor() -> Any:
                 )
             return verdict
 
-    return UniversalCompatibilityPP()
+    return UniversalCompatibilityPP(downloader)
 
 
 def register_universal_compatibility(ydl: Any) -> None:
@@ -184,4 +197,15 @@ def register_universal_compatibility(ydl: Any) -> None:
     if not callable(add):
         logger.debug("This yt-dlp object cannot take postprocessors; skipping normalisation.")
         return
-    add(make_universal_postprocessor(), when="post_process")
+    processor = make_universal_postprocessor(ydl)
+    # Recorded because the absence of this line cost a round trip with a real
+    # user: the support report showed FFmpeg as available and the conversion
+    # failing to find ffprobe, with nothing to say which binary was looked for.
+    # These are paths inside the user's own installation, which the report
+    # already carries; no other detail is added here.
+    logger.info(
+        "compatibility ffmpeg=%s ffprobe=%s",
+        processor.executable or "not found",
+        processor.probe_executable or "not found",
+    )
+    add(processor, when="post_process")

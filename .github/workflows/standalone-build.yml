@@ -229,11 +229,18 @@ jobs:
       - name: Smoke-test the extracted archive
         run: python packaging/smoke_test.py "${{ matrix.extracted }}" --mode ${{ matrix.mode }}
 
-      # Use the FFmpeg this application installs for its own users, rather than
-      # one the runner happens to ship. That makes the media check exercise the
-      # real path a user takes, and it is the only FFmpeg available here at all:
-      # every runner reported "no FFmpeg" on the first attempt, which made the
-      # check skip everywhere and prove nothing.
+      # Install the FFmpeg this application installs for its own users. It is
+      # the only FFmpeg available here at all: every runner reported "no
+      # FFmpeg" on the first attempt, which made the check skip everywhere and
+      # prove nothing.
+      #
+      # Deliberately NOT added to PATH. It used to be, and that is precisely
+      # why this gate stayed green through the bug it was supposed to catch:
+      # on PATH, the application finds ffmpeg and ffprobe by bare name and
+      # never exercises its own discovery, so the check proved only that the
+      # frozen binary can run an FFmpeg somebody else provided. Leaving it off
+      # PATH reproduces the machine that failed -- a managed install and
+      # nothing else -- and makes discovery the thing under test.
       - name: Provide the managed FFmpeg for the media check
         shell: bash
         run: |
@@ -251,8 +258,10 @@ jobs:
               raise SystemExit(0)
           installed = manager.install("ffmpeg")
           print(f"managed FFmpeg installed at {installed}")
-          with open(os.environ["GITHUB_PATH"], "a", encoding="utf-8") as handle:
-              handle.write(f"{installed}\n")
+          # The native form of the path: on Windows the shell's $PWD is a
+          # POSIX-style Git Bash path that the frozen application cannot use.
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
+              handle.write(f"MD_TOOLING_ROOT={root}\n")
           EOF
 
       # Requirement of this phase: put a genuinely incompatible file through the
@@ -306,7 +315,30 @@ jobs:
           echo "source fixture:"
           "$FFPROBE" -v error -show_entries stream=codec_name,codec_type,pix_fmt \
             -of default=noprint_wrappers=1 media/incompatible.mp4
-          MD_COMPAT_SELFTEST="$PWD/media/incompatible.mp4" "${{ matrix.exe }}"
+          # Point the application's app data at the managed install and give it
+          # nothing else: this is the owner's machine, where FFmpeg exists only
+          # because the application put it there. Discovery has to work.
+          XDG_DATA_HOME="$MD_TOOLING_ROOT" LOCALAPPDATA="$MD_TOOLING_ROOT" \
+          HOME="$MD_TOOLING_ROOT" USERPROFILE="$MD_TOOLING_ROOT" \
+          MD_COMPAT_SELFTEST="$PWD/media/incompatible.mp4" "${{ matrix.exe }}" | tee compat.txt
+          grep -q "compatibility self-test passed" compat.txt
+          # Passing is not enough: it has to have used the managed copy. A
+          # bare "ffprobe" here would mean discovery was bypassed again.
+          python - <<'EOF'
+          import os
+          import pathlib
+
+          root = pathlib.Path(os.environ["MD_TOOLING_ROOT"]).resolve()
+          report = pathlib.Path("compat.txt").read_text(encoding="utf-8")
+          line = next(
+              line for line in report.splitlines() if line.startswith("discovered ffprobe:")
+          )
+          # Split once, so a Windows drive letter survives.
+          probe = pathlib.Path(line.split(":", 1)[1].strip()).resolve()
+          if root not in probe.parents:
+              raise SystemExit(f"ffprobe came from {probe}, not from the managed install at {root}")
+          print(f"confirmed: the managed ffprobe did the work ({probe})")
+          EOF
           echo "result:"
           "$FFPROBE" -v error -show_entries stream=codec_name,profile,pix_fmt \
             -show_entries format=format_name -of default=noprint_wrappers=1 \

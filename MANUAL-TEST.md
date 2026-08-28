@@ -7,21 +7,28 @@
 
 ## What changed since the last round
 
-**Managed FFmpeg and Deno now install on your Windows machine** — that was verified on real
-hardware and is closed. This round is about what happened next.
+Your Windows run closed a lot of ground, and all of it stays closed: managed FFmpeg installs,
+managed Deno installs, `HTTPS trust: system + certifi`, YouTube extraction, and **Original quality
+completing end to end**. The WebM it produced not playing in Windows or Apple players is Original
+mode doing exactly what it says; that is not a fault and this round does not change it.
 
-**A YouTube download still failed, and was described wrongly.** It reported the media as
-unavailable, suggesting it might be private, removed, age-restricted, region-locked or
-DRM-protected. yt-dlp had said none of that: it said no format matched the request. That
-misclassification is fixed, so a format problem now says it is a format problem.
+**Universal downloaded the video and then failed converting it**, with
 
-Three other things changed with it: the selector is a chain of candidates rather than one demand,
-so a quality cap that cannot be met falls back to the lowest available instead of failing; a video
-with no usable audio downloads and says it has no sound; and **yt-dlp's own messages now go into the
-log**, which is what was missing last time — the reason formats were skipped had been written to a
-stderr that a windowed build discards.
+```
+Postprocessing: ffprobe not found. Please install or provide the path using --ffmpeg-location
+```
 
-If the same URL still fails, the support report will now contain yt-dlp's own explanation.
+while `ffprobe.exe` sat in the managed folder the application had just installed. The normaliser
+was being built before it had anything to ask about where FFmpeg lived, and yt-dlp settles that
+question once and never revisits it -- so it fell back to the bare name `ffprobe` and searched your
+PATH, which had none. **This is now bound to the FFmpeg the application actually discovered**, and
+the same fault explains something quieter on every platform: `--ffmpeg-location` was being ignored
+for Universal conversions, on Linux and macOS too.
+
+Two smaller things came with it. The support report now records which FFmpeg the conversion is
+using, so this question can be answered from the log instead of by guesswork. And a conversion that
+fails no longer reports itself as a failed download: the file is on your disk and the message now
+says so, that it is the unconverted original, and that Original mode keeps that file deliberately.
 
 ## What CI has and has not shown
 
@@ -31,8 +38,15 @@ Three kinds of evidence, kept apart on purpose. None of them substitutes for ano
 | --- | --- |
 | Automated source tests | Ubuntu, Windows, macOS on Python 3.10–3.13 |
 | Automated artifact checks | The frozen application starts, serves, logs and shuts down cleanly on all four builds — checked against the extracted archive itself |
-| Automated media checks | The same VP9 + Opus MP4 converted by each frozen build to H.264 + AAC-LC; on macOS using FFmpeg installed from its real public URL |
+| Automated media checks | The same VP9 + Opus MP4 converted by each frozen build to H.264 + AAC-LC, **using the managed FFmpeg the application discovers for itself**, with no FFmpeg on PATH |
 | **Owner manual verification** | **Linux only.** A real YouTube download that played back; and a Universal conversion whose output played natively on a real iPhone in Files / Quick Look |
+
+> The media check used to put the managed FFmpeg on PATH before running, which let the application
+> find it by name and skip its own discovery entirely. That is why it stayed green through a bug
+> that made Universal unusable on a real Windows machine: it was testing that the frozen binary can
+> run an FFmpeg somebody else provided. The runners ship no FFmpeg of their own, so leaving the
+> managed one off PATH reproduces the machine that failed; the check now also asserts that the
+> binary which did the work came from the managed install.
 
 A green CI run is not a person double-clicking an application. Everything below is the part no
 runner can do: Gatekeeper, SmartScreen, whether a terminal window appears, whether FFmpeg installs
@@ -137,9 +151,11 @@ Get-FileHash Media-Downloader-Windows-x64-windowed.zip -Algorithm SHA256
       certificate error.
 - [ ] **Deno is initially unavailable**, then **install it through the interface** too. Same
       requirement: verified HTTPS, checksum, extract, available.
-- [ ] **Retry the exact YouTube URL that failed**, in both Universal and Original. If it still
-      fails, the message must no longer claim the media is private or region-locked, and the
-      support report should now contain yt-dlp's own reason — please send it.
+- [ ] **Retry the exact YouTube URL that failed, in Universal.** This is the check this round
+      exists for: it must reach **Completed**, and the file must play in the Windows native player
+      and on an iPhone. Reaching "Failed" after leaving a file behind is the bug, not a pass.
+- [ ] The same URL in **Original** still completes, as it did last time. Its `.webm` not playing
+      natively is expected and is not a failure.
 - [ ] Download an **Instagram** item
 - [ ] Download an **X/Twitter** item
 - [ ] Download a **YouTube** item
@@ -169,6 +185,9 @@ stranger. Two questions.
 - [ ] `HTTPS trust` names its sources, e.g. `system + certifi 2026.07.22`. If it says only
       `system`, the certificate bundle did not load and the download problem would return.
 - [ ] There is no TLS or certificate error anywhere in the report.
+- [ ] `compatibility ffmpeg=… ffprobe=…` names the binaries the conversion used. On a machine
+      with no system FFmpeg both must point inside `App data`, at the managed install — a bare
+      `ffmpeg` or `ffprobe` with no directory is the fault this round fixed.
 - [ ] The compatibility decision is recorded, e.g.
       `compatibility=universal source_video_codec=… action=…` followed by
       `final_video_codec=h264 final_audio_codec=aac final_audio_profile=LC final_container=mp4`.

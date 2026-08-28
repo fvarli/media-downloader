@@ -70,6 +70,19 @@ class NoFormatMatchError(DownloadFailedError):
     """
 
 
+class CompatibilityConversionError(DownloadFailedError):
+    """The media downloaded, but could not be made universally playable.
+
+    Kept apart from a plain download failure because the outcome on disk is
+    different and the user can see it: the file is there and it plays in VLC,
+    so "the download failed" reads as nonsense. What actually failed is the
+    conversion, and the file that survived is the untouched source -- which is
+    exactly what Original mode would have produced deliberately.
+
+    Subclasses DownloadFailedError so the process exit code is unchanged.
+    """
+
+
 class MediaUnavailableError(MediaDownloaderError):
     """The media exists but is not publicly accessible to this user.
 

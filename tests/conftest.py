@@ -121,6 +121,9 @@ class FakeYoutubeDL:
         post_hook_path: str | None = None,
     ) -> None:
         self.opts = opts
+        # yt-dlp exposes the options as `params`, and a postprocessor bound to
+        # this object reads them to find FFmpeg. Same dict, both names.
+        self.params = opts
         self._info = info
         self._error = error
         self._post_hook_path = post_hook_path
