@@ -96,6 +96,52 @@ def scrub(text: str) -> str:
     return _URL_PATTERN.sub(lambda m: redact_url(m.group(0)), cleaned)
 
 
+#: Stands in for the user's home directory in anything they might send onward.
+HOME_PLACEHOLDER = "<home>"
+
+#: Below this, a home path is too short to replace safely: "/" or a two-letter
+#: directory would match half the file system and destroy the report instead of
+#: anonymising it.
+_MIN_HOME_LENGTH = 4
+
+
+def redact_home(text: str, env: dict[str, str] | None = None) -> str:
+    """Replace the user's home directory with ``<home>``.
+
+    Support reports are full of absolute paths -- where downloads go, where the
+    application keeps its data, which FFmpeg the conversion used -- and on macOS
+    and Windows every one of them starts with the person's account name. The
+    paths still have to be readable, because "which directory did ffprobe come
+    from" is the question they answer, so only the prefix goes:
+
+        C:\\Users\\someone\\AppData\\Local\\...  ->  <home>\\AppData\\Local\\...
+
+    Applied when a report is built, never when the log is written. The file on
+    the user's own disk keeps real paths, which is what makes it worth reading;
+    the redaction is for the copy that leaves the machine.
+
+    Both separators are matched because a Windows path can arrive either way --
+    ``pathlib`` prints backslashes while an environment variable or a yt-dlp
+    message may carry forward slashes -- and matching is case-insensitive on
+    Windows, where ``C:\\Users`` and ``c:\\users`` are the same directory.
+    """
+    from media_downloader.paths import home_dir
+
+    try:
+        home = str(home_dir(env)).rstrip("/\\")
+    except Exception:  # diagnostics must never be the thing that fails
+        return text
+    if len(home) < _MIN_HOME_LENGTH:
+        return text
+
+    # Written from the resolved home rather than from a username, so it also
+    # covers a home that is not simply /Users/<name>.
+    separator = r"[/\\]"
+    pattern = separator.join(re.escape(part) for part in re.split(r"[/\\]", home))
+    flags = re.IGNORECASE if os.name == "nt" else 0
+    return re.sub(pattern, HOME_PLACEHOLDER, text, flags=flags)
+
+
 class RedactingFilter(logging.Filter):
     """Scrubs every record on its way to the file.
 
@@ -358,7 +404,9 @@ def build_support_report(
     lines += ["", f"Recent log (last {len(log)} lines)", "-" * 40]
     lines += log or ["(no log entries available)"]
     lines += ["", "This report was generated locally and is not sent anywhere."]
-    return "\n".join(lines) + "\n"
+    # Redacted once, over the finished text, rather than field by field: a line
+    # added to this report later is covered without anyone remembering to.
+    return redact_home("\n".join(lines) + "\n", env)
 
 
 def report_filename(now: datetime | None = None) -> str:
@@ -385,6 +433,8 @@ def describe_environment() -> dict[str, Any]:
         "release": platform.release(),
         "architecture": platform.machine(),
         "yt_dlp": _ytdlp_version(),
-        "log_file": str(STATE.log_file) if STATE.log_file else None,
+        # Redacted for the same reason as the report: this object is served
+        # beside it by /api/diagnostics and copied to the clipboard with it.
+        "log_file": redact_home(str(STATE.log_file)) if STATE.log_file else None,
         "pid": os.getpid(),
     }

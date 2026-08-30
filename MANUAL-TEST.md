@@ -7,28 +7,26 @@
 
 ## What changed since the last round
 
-Your Windows run closed a lot of ground, and all of it stays closed: managed FFmpeg installs,
-managed Deno installs, `HTTPS trust: system + certifi`, YouTube extraction, and **Original quality
-completing end to end**. The WebM it produced not playing in Windows or Apple players is Original
-mode doing exactly what it says; that is not a fault and this round does not change it.
+Windows and macOS are both verified now, so this round is release hardening rather than a bug hunt.
+Nothing about how downloading works has changed; the fixes are about what the build contains, what a
+support report reveals, and one case where the application described its own result wrongly.
 
-**Universal downloaded the video and then failed converting it**, with
+**A support report no longer carries your account name.** Reports were showing
+`C:\Users\<you>\AppData\Local\…` and `/Users/<you>/Library/…` throughout, and those get pasted
+into issues and emails. The home directory is now replaced with `<home>` in anything you export or
+copy, keeping the rest of the path intact so it is still worth reading. **The log file on your own
+disk is unchanged** and still holds real paths — that is deliberate, since it is what you debug with.
 
-```
-Postprocessing: ffprobe not found. Please install or provide the path using --ffmpeg-location
-```
+**Universal can no longer report audio it did not produce.** One earlier run of a video finished as
+`selection=video_plus_audio` while the file itself had no sound. Those were two different facts:
+what the site said it was sending, and what `ffprobe` found in the finished file. Nothing compared
+them, so the "downloaded without audio" warning never appeared. The file is now the one that counts.
 
-while `ffprobe.exe` sat in the managed folder the application had just installed. The normaliser
-was being built before it had anything to ask about where FFmpeg lived, and yt-dlp settles that
-question once and never revisits it -- so it fell back to the bare name `ffprobe` and searched your
-PATH, which had none. **This is now bound to the FFmpeg the application actually discovered**, and
-the same fault explains something quieter on every platform: `--ffmpeg-location` was being ignored
-for Universal conversions, on Linux and macOS too.
+**mutagen is out of the builds.** yt-dlp's packaging hook was compiling it in, and it is
+GPL-2.0-or-later — copyleft inside an MIT binary, for a feature this application never uses.
 
-Two smaller things came with it. The support report now records which FFmpeg the conversion is
-using, so this question can be answered from the log instead of by guesswork. And a conversion that
-fails no longer reports itself as a failed download: the file is on your disk and the message now
-says so, that it is the unconverted original, and that Original mode keeps that file deliberately.
+**The builds now carry their licences**, and the macOS app finally has a real bundle identifier and
+reports its own version instead of `0.0.0`.
 
 ## What CI has and has not shown
 
@@ -39,7 +37,7 @@ Three kinds of evidence, kept apart on purpose. None of them substitutes for ano
 | Automated source tests | Ubuntu, Windows, macOS on Python 3.10–3.13 |
 | Automated artifact checks | The frozen application starts, serves, logs and shuts down cleanly on all four builds — checked against the extracted archive itself |
 | Automated media checks | The same VP9 + Opus MP4 converted by each frozen build to H.264 + AAC-LC, **using the managed FFmpeg the application discovers for itself**, with no FFmpeg on PATH |
-| **Owner manual verification** | **Linux only.** A real YouTube download that played back; and a Universal conversion whose output played natively on a real iPhone in Files / Quick Look |
+| **Owner manual verification** | **Linux, Windows and macOS arm64.** Launch, managed FFmpeg and Deno installing and persisting across a restart, YouTube extraction, Original completing, and Universal producing H.264 + AAC-LC MP4 that plays natively with picture and sound |
 
 > The media check used to put the managed FFmpeg on PATH before running, which let the application
 > find it by name and skip its own discovery entirely. That is why it stayed green through a bug
@@ -196,7 +194,9 @@ stranger. Two questions.
 - [ ] The recent log shows a complete download lifecycle —
       `preparing → downloading → processing → completed` — with the service, media id and final
       filename on the completed record. Not a run that stops at `preparing`.
-- [ ] `App data` and `Log file` point inside your own user directory.
+- [ ] `App data` and `Log file` read `<home>/…`, not your account name. This is the one item that
+      is new this round: the exported report must not contain your username anywhere, while the
+      rest of each path stays readable.
 
 **Is it clean?** It must contain none of:
 
@@ -207,6 +207,7 @@ stranger. Two questions.
 - [ ] `Cookie` or `Authorization` headers
 - [ ] Credentials in a URL query string or fragment
 - [ ] Unrelated environment variables
+- [ ] Your account name, in any path
 
 CI asserts the absence of each of these on every run, but only a report from a real desktop can
 show what a real desktop produces. If anything above appears, that is a release blocker, and the

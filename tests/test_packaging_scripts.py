@@ -297,3 +297,85 @@ def test_the_gpl_encoder_is_never_an_acceptable_substitute() -> None:
     verdict = verify_archive.licensing_verdict(with_x264)
     assert verdict["--enable-gpl"] is False
     assert verdict["--enable-libopenh264"] is False
+
+
+# -- what the frozen build is allowed to contain -------------------------
+#
+# yt-dlp's own PyInstaller hook lists mutagen as a hidden import, so it was
+# compiled into every build: 96 modules of GPL-2.0-or-later code inside an MIT
+# binary, for a feature nothing here can reach. yt-dlp guards `import mutagen`
+# with try/except and only its thumbnail-embedding postprocessor uses it, which
+# this application never configures.
+#
+# Asserted against the spec's own syntax rather than by searching the file for
+# the word, which the docstring and the comments also contain.
+
+SPEC = PACKAGING / "media-downloader.spec"
+
+
+def _spec_excludes() -> list[str]:
+    """The literal ``excludes=[...]`` passed to Analysis."""
+    import ast
+
+    tree = ast.parse(SPEC.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        for keyword in node.keywords:
+            if keyword.arg == "excludes":
+                return [
+                    element.value
+                    for element in getattr(keyword.value, "elts", [])
+                    if isinstance(element, ast.Constant)
+                ]
+    raise AssertionError("the spec passes no excludes= to Analysis")
+
+
+def test_the_gpl_dependency_is_excluded_from_the_build() -> None:
+    assert "mutagen" in _spec_excludes()
+
+
+def test_the_other_exclusions_are_still_there() -> None:
+    """Adding one must not have quietly dropped the rest."""
+    excludes = _spec_excludes()
+    for unwanted in ("tkinter", "matplotlib", "numpy", "pytest", "PIL"):
+        assert unwanted in excludes, unwanted
+
+
+def test_the_licence_texts_exist_to_be_shipped() -> None:
+    """The spec adds these to the bundle, so a rename must fail here rather
+    than at build time on a runner."""
+    root = SPEC.resolve().parent.parent
+    for name in ("LICENSE", "THIRD-PARTY-NOTICES.md"):
+        assert (root / name).is_file(), name
+    spec_text = SPEC.read_text(encoding="utf-8")
+    assert '"LICENSE"' in spec_text
+    assert '"THIRD-PARTY-NOTICES.md"' in spec_text
+
+
+def test_the_notices_record_the_gpl_exclusion_and_the_mpl_dependency() -> None:
+    """The two facts a reader of the notices actually needs."""
+    notices = (SPEC.resolve().parent.parent / "THIRD-PARTY-NOTICES.md").read_text(encoding="utf-8")
+    assert "mutagen" in notices
+    assert "MPL-2.0" in notices
+    assert "certifi" in notices
+
+
+def test_the_macos_bundle_has_a_real_identifier() -> None:
+    """PyInstaller defaults this to the display name -- "Media Downloader",
+    which has a space and is not reverse-DNS -- and that would block
+    notarisation. It is also permanent: macOS identifies the application by it.
+    """
+    spec_text = SPEC.read_text(encoding="utf-8")
+    assert 'bundle_identifier="com.ferzendervarli.media-downloader"' in spec_text
+
+
+def test_the_bundle_version_comes_from_the_package() -> None:
+    """Finder showed 0.0.0 for every build until this was set, and a version
+    repeated in two places drifts."""
+    from media_downloader import __version__
+
+    spec_text = SPEC.read_text(encoding="utf-8")
+    assert "CFBundleShortVersionString" in spec_text
+    assert f'__version__ = "{__version__}"' not in spec_text, "the version must not be hardcoded"
+    assert "APP_VERSION" in spec_text

@@ -42,7 +42,7 @@ def app_data_dir(env: Mapping[str, str] | None = None) -> Path:
     """
     environ = os.environ if env is None else env
     platform = current_platform()
-    home = _home(env)
+    home = home_dir(env)
 
     if platform == "darwin":
         return home / "Library" / "Application Support" / APP_DISPLAY_NAME
@@ -101,8 +101,12 @@ def ensure_dir(path: Path) -> Path:
     return path
 
 
-def _home(env: Mapping[str, str] | None = None) -> Path:
+def home_dir(env: Mapping[str, str] | None = None) -> Path:
     """The user's home directory, or the working directory if there is none.
+
+    Public because diagnostics needs it too: a support report has to recognise
+    this prefix in order to take the user's name back out of it before the
+    report is shared.
 
     An injected environment is honoured here, not just by the callers that read
     XDG_DATA_HOME and LOCALAPPDATA directly. ``Path.home()`` reads the *process*

@@ -11,12 +11,25 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+#: Shown wherever FFmpeg turns out to be missing -- the CLI's environment
+#: notices and the two places a request needs it outright.
+#:
+#: It used to say FFmpeg "must be installed system-wide and be reachable on
+#: your PATH" and list apt, Homebrew and winget. That stopped being true once
+#: the application could install a verified copy for itself, and it sat
+#: directly beside the button that does exactly that. The managed install comes
+#: first now, because for most people it is the whole answer; the system-wide
+#: route stays, because it is still the only one on Intel Macs and is always
+#: preferred when a copy is already there.
 FFMPEG_GUIDANCE = (
-    "FFmpeg was not found. It is a separate program, not a Python package, and "
-    "must be installed system-wide and be reachable on your PATH. Install it "
-    "with your usual package manager (for example apt, dnf, pacman, Homebrew, "
-    "winget, Chocolatey or Scoop), or download a build from https://ffmpeg.org/download.html "
-    "and point this tool at it with --ffmpeg-location."
+    "FFmpeg was not found. It is a separate program, not a Python package. In "
+    "the Media Downloader window you can install a verified copy in one click, "
+    "kept in this application's own folder -- nothing is installed system-wide "
+    "and no administrator rights are needed. You need to do that only once. "
+    "Otherwise install it with your usual package manager (for example apt, "
+    "dnf, pacman, Homebrew, winget, Chocolatey or Scoop), or download a build "
+    "from https://ffmpeg.org/download.html and point this tool at it with "
+    "--ffmpeg-location."
 )
 
 

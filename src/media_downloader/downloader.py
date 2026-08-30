@@ -29,7 +29,7 @@ from media_downloader.ffmpeg import FFmpegStatus
 from media_downloader.jsruntime import JSRuntimeStatus
 from media_downloader.logging_setup import get_logger
 from media_downloader.naming import AUTO_NAME_FIELD, build_auto_filename_stem, ensure_output_dir
-from media_downloader.normalize import register_universal_compatibility
+from media_downloader.normalize import FINAL_AUDIO_CODEC_FIELD, register_universal_compatibility
 from media_downloader.options import build_info_opts, build_ydl_opts
 
 logger = get_logger("downloader")
@@ -101,6 +101,24 @@ class MediaInfo:
             filesize_bytes=info.get("filesize") or info.get("filesize_approx"),
             ext=info.get("ext"),
         )
+
+
+#: Sentinel: the file was never probed, which is different from probed and
+#: silent. Original mode never probes, so its reporting stays metadata-derived.
+_NOT_PROBED = object()
+
+
+def _probed_audio_codec(info: dict[str, Any]) -> Any:
+    """The audio codec ffprobe found in the produced file, if anything looked.
+
+    Read from the per-download entry as well as the top level, because that is
+    where a postprocessor's changes land -- yt-dlp collects the dict the
+    postprocessor mutated into ``requested_downloads``.
+    """
+    for candidate in (info, *(info.get("requested_downloads") or [])):
+        if FINAL_AUDIO_CODEC_FIELD in candidate:
+            return candidate[FINAL_AUDIO_CODEC_FIELD]
+    return _NOT_PROBED
 
 
 @dataclass(frozen=True)
@@ -417,6 +435,24 @@ class Downloader:
                 selection = "fallback_video_only"
             else:
                 selection = "audio_only"
+
+        # Everything above is the extractor's account of what it *selected*.
+        # Universal probes what it actually *produced*, and where that answer
+        # exists it wins: a real download once reported video_plus_audio for a
+        # file with no sound, which meant the "no audio" notice never reached
+        # the person holding a silent video.
+        probed = _probed_audio_codec(info)
+        if probed is not _NOT_PROBED and bool(probed) is not bool(has_audio):
+            logger.info(
+                "selection corrected from the produced file: metadata_audio=%s file_audio=%s",
+                "yes" if has_audio else "no",
+                probed or "none",
+            )
+            has_audio = bool(probed)
+            if not has_audio:
+                selection = "fallback_video_only"
+            elif selection == "fallback_video_only":
+                selection = "video_plus_audio" if merged else "muxed"
 
         return SelectionOutcome(
             selection=selection,

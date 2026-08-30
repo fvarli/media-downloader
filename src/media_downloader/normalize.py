@@ -36,6 +36,12 @@ from media_downloader.logging_setup import get_logger
 
 logger = get_logger("compatibility")
 
+#: Where the normaliser records the audio codec it actually found in the file
+#: it produced, so the download can report what is really there rather than what
+#: the extractor said would be there. Absent means nothing probed the file --
+#: Original mode never does -- and ``None`` means it was probed and is silent.
+FINAL_AUDIO_CODEC_FIELD = "_md_final_audio_codec"
+
 #: Suffix for the in-progress conversion. It sits beside the target so the
 #: promotion below is a rename within one filesystem rather than a copy.
 TEMP_SUFFIX = ".compat-tmp.mp4"
@@ -138,6 +144,10 @@ def make_universal_postprocessor(downloader: Any) -> Any:
 
             info["filepath"] = str(target)
             info["ext"] = "mp4"
+            # ffprobe on the finished file, which is the only thing that knows
+            # whether it has sound. The extractor's format metadata is a
+            # statement about what was selected, and the two can disagree.
+            info[FINAL_AUDIO_CODEC_FIELD] = verdict.audio_codec
             # Hand the superseded source back for deletion when the conversion
             # changed the extension; otherwise it has already been replaced.
             leftovers = [str(source_path)] if target != source_path else []

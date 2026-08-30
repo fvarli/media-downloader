@@ -9,7 +9,7 @@ from __future__ import annotations
 import io
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -390,3 +390,149 @@ def test_console_setup_still_replaces_the_console_handler(tmp_path: Path) -> Non
         h for h in logger.handlers if not isinstance(h, logging.handlers.RotatingFileHandler)
     ]
     assert len(console_handlers) == 1
+
+
+# -- the user's name in a report they send onward ------------------------
+#
+# Reports from two real machines carried "/Users/rmznv/Library/Application
+# Support/..." and "C:\Users\uzeyi\AppData\Local\...". A support report is
+# meant to be pasted into an issue or emailed to a stranger, and the account
+# name is not part of what makes it useful.
+#
+# The redaction is deliberately export-only: the log on the user's own disk
+# keeps real absolute paths, because "which directory did this ffprobe come
+# from" is exactly the question it exists to answer.
+
+
+def _home_env(tmp_path: Path) -> dict[str, str]:
+    """An isolated home whose name would be embarrassing to leak."""
+    home = tmp_path / "home" / "a-real-person"
+    (home / ".local" / "share").mkdir(parents=True)
+    return {"HOME": str(home), "XDG_DATA_HOME": str(home / ".local" / "share")}
+
+
+def test_the_report_does_not_carry_the_account_name(
+    _isolated_state: dict[str, str], tmp_path: Path
+) -> None:
+    env = _home_env(tmp_path)
+    configure_file_logging(env)
+
+    report = build_support_report(download_dir=Path(env["HOME"]) / "Downloads", env=env)
+
+    assert "a-real-person" not in report
+    assert diagnostics.HOME_PLACEHOLDER in report
+
+
+def test_the_rest_of_the_path_survives(_isolated_state: dict[str, str], tmp_path: Path) -> None:
+    """Anonymising must not cost the information the path was there for."""
+    env = _home_env(tmp_path)
+    configure_file_logging(env)
+
+    report = build_support_report(env=env)
+
+    assert "media-downloader/logs/media-downloader.log" in report.replace("\\", "/")
+
+
+def test_the_log_on_disk_keeps_the_real_path(
+    _isolated_state: dict[str, str], tmp_path: Path
+) -> None:
+    """Export-only, by design: this is the file the user debugs with."""
+    from media_downloader.logging_setup import get_logger
+
+    env = _home_env(tmp_path)
+    path = configure_file_logging(env)
+    assert path is not None
+    get_logger("t").info("compatibility ffprobe=%s", Path(env["HOME"]) / "tools" / "ffprobe")
+    for handler in logging.getLogger("media_downloader").handlers:
+        handler.flush()
+
+    assert "a-real-person" in path.read_text(encoding="utf-8")
+
+
+def test_a_home_path_logged_earlier_is_redacted_on_the_way_out(
+    _isolated_state: dict[str, str], tmp_path: Path
+) -> None:
+    """The log tail is where most of these paths actually live."""
+    from media_downloader.logging_setup import get_logger
+
+    env = _home_env(tmp_path)
+    configure_file_logging(env)
+    get_logger("t").info("compatibility ffprobe=%s", Path(env["HOME"]) / "tools" / "ffprobe")
+    for handler in logging.getLogger("media_downloader").handlers:
+        handler.flush()
+
+    report = build_support_report(env=env)
+
+    assert "a-real-person" not in report
+    assert "tools/ffprobe" in report.replace("\\", "/")
+
+
+def test_the_environment_object_is_redacted_too(
+    _isolated_state: dict[str, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """/api/diagnostics serves this beside the report, and it carried the same
+    path in full."""
+    import media_downloader.paths as paths_module
+
+    env = _home_env(tmp_path)
+    configure_file_logging(env)
+    monkeypatch.setattr(paths_module, "home_dir", lambda e=None: Path(env["HOME"]))
+
+    log_file = diagnostics.describe_environment()["log_file"]
+
+    assert log_file is not None
+    assert "a-real-person" not in log_file
+
+
+# -- the redaction itself ------------------------------------------------
+
+
+WIN_HOME = r"C:\Users\uzeyi"
+MAC_HOME = "/Users/rmznv"
+
+
+@pytest.mark.parametrize(
+    ("home", "text", "expected"),
+    [
+        # Windows, both separators: pathlib prints one, yt-dlp may print the other.
+        (
+            WIN_HOME,
+            rf"App data: {WIN_HOME}\AppData\Local\MD",
+            r"App data: <home>\AppData\Local\MD",
+        ),
+        (WIN_HOME, "log: C:/Users/uzeyi/AppData/x.log", "log: <home>/AppData/x.log"),
+        (
+            MAC_HOME,
+            f"{MAC_HOME}/Library/Application Support/MD",
+            "<home>/Library/Application Support/MD",
+        ),
+        # Someone else's home is not ours to recognise, and guessing would be worse.
+        (WIN_HOME, r"C:\Users\somebody\file", r"C:\Users\somebody\file"),
+    ],
+)
+def test_only_the_home_prefix_is_replaced(
+    home: str, text: str, expected: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import media_downloader.paths as paths_module
+
+    monkeypatch.setattr(paths_module, "home_dir", lambda e=None: PurePosixPath(home))
+    assert diagnostics.redact_home(text) == expected
+
+
+def test_an_absurdly_short_home_is_left_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A home of "/" would match every path in the report and destroy it."""
+    import media_downloader.paths as paths_module
+
+    monkeypatch.setattr(paths_module, "home_dir", lambda e=None: PurePosixPath("/"))
+    assert diagnostics.redact_home("/etc/hosts and /usr/bin") == "/etc/hosts and /usr/bin"
+
+
+def test_redaction_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Diagnostics must not be the thing that fails."""
+    import media_downloader.paths as paths_module
+
+    def broken(e: object = None) -> Path:
+        raise RuntimeError("no home")
+
+    monkeypatch.setattr(paths_module, "home_dir", broken)
+    assert diagnostics.redact_home("unchanged") == "unchanged"

@@ -161,6 +161,47 @@ jobs:
           MD_WINDOWED_BUILD: ${{ matrix.windowed }}
         run: python -m PyInstaller packaging/media-downloader.spec --noconfirm
 
+      # What ends up inside the binary is a licensing question, not a taste
+      # one. yt-dlp's PyInstaller hook lists mutagen (GPL-2.0-or-later) as a
+      # hidden import, and it was compiled into every build until it was
+      # excluded -- nothing here can reach it, and an MIT binary should not be
+      # carrying copyleft for an unreachable feature. Asserted against the PYZ
+      # that actually ships, so a hook change cannot put it back quietly.
+      - name: No GPL components in the frozen build
+        shell: bash
+        run: |
+          set -eu
+          python - <<'EOF'
+          import pathlib
+          import sys
+
+          toc = pathlib.Path("build/media-downloader/PYZ-00.toc")
+          if not toc.is_file():
+              sys.exit(f"expected {toc} from the build")
+          hits = [line for line in toc.read_text(encoding="utf-8").splitlines() if "mutagen" in line]
+          if hits:
+              sys.exit(f"mutagen is back in the shipped archive ({len(hits)} entries)")
+          print("confirmed: no mutagen in the shipped archive")
+          EOF
+
+      # The licence texts have to travel with the binary; certifi's MPL-2.0
+      # requires it explicitly.
+      - name: Licence texts ship with the build
+        shell: bash
+        run: |
+          set -eu
+          python - <<'EOF'
+          import pathlib
+          import sys
+
+          root = pathlib.Path("dist")
+          for name in ("LICENSE", "THIRD-PARTY-NOTICES.md"):
+              found = list(root.rglob(name))
+              if not found:
+                  sys.exit(f"{name} is missing from the build")
+              print(f"confirmed: {name} ships at {found[0]}")
+          EOF
+
       # Deterministic and offline. This is the check that must stay green: it
       # exercises the built executable, not the source tree.
       - name: Smoke-test the artifact

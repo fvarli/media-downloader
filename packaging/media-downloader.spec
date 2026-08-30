@@ -8,7 +8,9 @@ JavaScript, certificate bundles, pycryptodomex, websockets, requests, urllib3,
 mutagen and brotli. Duplicating any of that here would only create a second
 place to keep in sync.
 
-We contribute exactly one thing yt-dlp cannot know about: our own web assets.
+We contribute three things yt-dlp cannot know about: our own web assets, the
+licence texts that have to accompany a distributed binary, and the removal of
+mutagen -- see the exclusion below.
 
 onedir, not onefile: onefile re-extracts the whole bundle to a temporary
 directory on every launch, which is slow with yt-dlp's footprint and trips
@@ -24,6 +26,7 @@ Build with:
 """
 
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -31,6 +34,13 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files
 
 APP_NAME = "media-downloader"
+
+# Read from the package rather than repeated here: a version that has to be
+# updated in two places eventually is not.
+_init = Path(SPECPATH).parent / "src" / "media_downloader" / "__init__.py"
+_match = re.search(r'__version__ = "([^"]+)"', _init.read_text(encoding="utf-8"))
+assert _match, "could not read __version__ from the package"
+APP_VERSION = _match.group(1)
 
 # Console or windowed is an explicit build-time choice, not something to be
 # rewritten later. Validation builds keep the console so CI can read --version,
@@ -47,6 +57,16 @@ IS_MACOS = sys.platform == "darwin"
 # The web UI's HTML/CSS/JS are read through importlib.resources at runtime, so
 # they must land inside the package directory in the bundle.
 datas = collect_data_files("media_downloader", includes=["web/static/*"])
+
+# A binary is a distribution, and several of the libraries inside it require
+# their licence to accompany it -- certifi's MPL-2.0 most explicitly. Shipping
+# the texts costs a few kilobytes and is the difference between complying and
+# meaning to.
+_repo_root = Path(SPECPATH).parent
+datas += [
+    (str(_repo_root / "LICENSE"), "."),
+    (str(_repo_root / "THIRD-PARTY-NOTICES.md"), "."),
+]
 
 # Record console-vs-windowed *in* the bundle, because the application has to
 # know at runtime and cannot reliably tell by looking. A double-clicked
@@ -69,8 +89,21 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    # Nothing here needs a GUI toolkit, a plotting stack or a test runner.
-    excludes=["tkinter", "matplotlib", "numpy", "pytest", "PIL"],
+    excludes=[
+        # Nothing here needs a GUI toolkit, a plotting stack or a test runner.
+        "tkinter",
+        "matplotlib",
+        "numpy",
+        "pytest",
+        "PIL",
+        # mutagen is GPL-2.0-or-later, and yt-dlp's own hook pulls it in as a
+        # hidden import. It is optional there -- yt-dlp guards `import mutagen`
+        # with try/except and only EmbedThumbnailPP uses it, which this
+        # application never configures -- so excluding it removes copyleft code
+        # from an MIT binary for a feature nobody can reach. The same reasoning
+        # that made the managed FFmpeg an LGPL build.
+        "mutagen",
+    ],
     noarchive=False,
     optimize=0,
 )
@@ -112,12 +145,22 @@ if IS_MACOS and WINDOWED:
     app = BUNDLE(
         coll,
         name=f"{BUNDLE_NAME}.app",
-        # TODO: icon and bundle identifier before the first public release.
+        # TODO: an icon before the first public release.
         icon=None,
-        bundle_identifier=None,
+        # Permanent from here on. macOS identifies an application by this, not
+        # by its name, so changing it later would make every installed copy
+        # look like a different application. PyInstaller's default is the
+        # display name -- "Media Downloader", with a space and no reverse-DNS
+        # form -- which is not a valid identifier and would block notarisation.
+        bundle_identifier="com.ferzendervarli.media-downloader",
+        # Without this PyInstaller writes "0.0.0", which is what Finder's Get
+        # Info showed for every build so far.
+        version=APP_VERSION,
         info_plist={
             "CFBundleName": BUNDLE_NAME,
             "CFBundleDisplayName": BUNDLE_NAME,
+            "CFBundleShortVersionString": APP_VERSION,
+            "CFBundleVersion": APP_VERSION,
             "NSHighResolutionCapable": True,
             # No document types and no URL schemes: this application is opened
             # by the user, never by the system on their behalf.

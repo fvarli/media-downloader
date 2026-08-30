@@ -446,7 +446,10 @@ Two of those outcomes are worth stating plainly, and the application says so rat
 them to be discovered:
 
 - **A video with no usable audio still downloads**, and the result says it has no sound. Refusing a
-  perfectly good video stream because no audio accompanies it would be worse.
+  perfectly good video stream because no audio accompanies it would be worse. In Universal mode
+  that statement comes from `ffprobe` reading the finished file, not from what the site said it was
+  sending — the two can disagree, and only the file is the truth. Original mode has no such check
+  and reports what the site claimed.
 - **A quality cap is an upper bound.** Asking for 1080p where only 720p exists gives 720p. Where
   nothing at all exists below the cap, the lowest available is downloaded and the result says the
   cap could not be honoured — somebody asking for 360p wants a small file, not an error.
@@ -511,6 +514,10 @@ If one is missing, the web interface can fetch it for you -- and only then:
 - it is stored in this application's own directory. **`PATH` is never modified, nothing is installed
   system-wide, and no step needs administrator rights.**
 - a tool you already have installed is always preferred over a downloaded copy.
+- **you do this once.** An installed tool stays installed: it survives quitting the application,
+  restarting it, and restarting the computer. The next time you open Media Downloader it finds the
+  copy it already has and reports it as available, with nothing to click and nothing to re-download.
+  Once FFmpeg is installed this way you do not need Homebrew, winget or a system-wide FFmpeg at all.
 
 | OS | Where they are kept |
 | --- | --- |
@@ -898,5 +905,17 @@ Contributions are welcome.
 
 Released under the [MIT License](LICENSE). Copyright (c) 2026 Ferzender Varli.
 
-This project depends on, but does not include, yt-dlp (Unlicense) and FFmpeg (LGPL or GPL depending
-on the build). Those are separate works under their own licenses.
+Installed from source, this project depends on but does not include yt-dlp (Unlicense) and FFmpeg
+(LGPL or GPL depending on the build), which are separate works under their own licenses.
+
+**The standalone builds are different**, because a frozen binary carries its dependencies inside it:
+a Python interpreter, yt-dlp, Rich, certifi and the rest. Every one is listed with its licence in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md), which is also shipped inside each build.
+
+Two consequences worth stating rather than leaving to be discovered:
+
+- **mutagen is deliberately excluded from the builds.** yt-dlp's own PyInstaller hook pulls it in,
+  and it is GPL-2.0-or-later — copyleft inside an otherwise MIT binary, for a thumbnail-embedding
+  feature this application never uses. It is excluded in the spec and a CI check keeps it out.
+- **FFmpeg is never bundled.** It is fetched only when you ask, and the builds this project pins are
+  LGPL, configured without `--enable-gpl` and without `--enable-nonfree`.
